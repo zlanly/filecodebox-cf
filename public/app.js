@@ -1,4 +1,4 @@
-// FileCodeBox-CF 前端逻辑（零依赖原生 JS�?
+// FileCodeBox-CF 前端逻辑（零依赖原生 JS）
 (() => {
   'use strict';
 
@@ -39,7 +39,7 @@
   }
 
   function fmtExpire(ts) {
-    if (!ts) return '永久';
+    if (!ts) return '永久有效';
     const d = new Date(ts);
     return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
   }
@@ -116,7 +116,7 @@
   // ---------- 寄件 ----------
   $('#sendBtn').addEventListener('click', async () => {
     const btn = $('#sendBtn');
-    btn.disabled = true; btn.textContent = '生成中�?';
+    btn.disabled = true; btn.textContent = '生成中…';
     try {
       const fd = new FormData();
       fd.set('type', state.type);
@@ -131,11 +131,11 @@
         fd.set('text', text);
       } else {
         if (!state.file) throw new Error('请先选择文件');
-        // 文件交给 ImgBed：把请求体流式代理到 ImgBed �? /upload（大文件亦支持）
+        // 文件交给 ImgBed：把请求体流式代理到 ImgBed 的 /upload（大文件亦支持）
         const upForm = new FormData();
         upForm.set('file', state.file);
         const up = await api('/api/imgbed/upload', { method: 'POST', body: upForm });
-        if (!up.id) throw new Error('ImgBed 未返回文�? id');
+        if (!up.id) throw new Error('ImgBed 未返回文件 id');
         fd.set('file_key', up.id);
         fd.set('file_name', state.file.name);
         fd.set('file_type', state.file.type || 'application/octet-stream');
@@ -147,7 +147,7 @@
     } catch (e) {
       toast(e.message);
     } finally {
-      btn.disabled = false; btn.textContent = '生成取件�?';
+      btn.disabled = false; btn.textContent = '生成取件码';
     }
   });
 
@@ -156,15 +156,15 @@
     const link = `${location.origin}/#r/${data.code}`;
     $('#resultLink').value = link;
     const tips = [];
-    tips.push(data.expire_at ? `过期�?${fmtExpire(data.expire_at)}` : '永久有效');
+    tips.push(data.expire_at ? `过期：${fmtExpire(data.expire_at)}` : '永久有效');
     tips.push(data.download_limit > 0 ? `可取 ${data.download_limit} 次` : '取件次数不限');
-    if (data.type === 'file') tips.push('文件已存�? ImgBed');
+    if (data.type === 'file') tips.push('文件已存入 ImgBed');
     $('#resultTip').textContent = tips.join(' · ');
     $('#sendResult').classList.remove('hidden');
   }
 
   $('#copyCode').addEventListener('click', () => copy($('#resultCode').textContent, '已复制取件码'));
-  $('#copyLink').addEventListener('click', () => copy($('#resultLink').value, '已复制链�?'));
+  $('#copyLink').addEventListener('click', () => copy($('#resultLink').value, '已复制链接'));
   function copy(text, ok) {
     navigator.clipboard.writeText(text).then(() => toast(ok)).catch(() => toast('复制失败'));
   }
@@ -180,11 +180,11 @@
     const code = normalizeCode(raw);
     if (!code) { toast('请输入取件码'); return; }
     pendingCode = code;
-    out.innerHTML = '<div class="spinner">取件中�?</div>';
+    out.innerHTML = '<div class="spinner">取件中…</div>';
     $('#pwdRow').classList.add('hidden');
 
     try {
-      // 先取元信�?
+      // 先取元信息
       const meta = await api('/api/share/' + code);
       if (meta.has_password && !withPwd) {
         out.innerHTML = '';
@@ -192,7 +192,7 @@
         $('#receivePwd').focus();
         return;
       }
-      // 取件（消耗）
+      // 取件（消耗一次）
       const fd = new FormData();
       if (withPwd) fd.set('password', $('#receivePwd').value);
       const claim = await api('/api/share/' + code + '/claim', { method: 'POST', body: fd });
@@ -200,7 +200,7 @@
       if (claim.type === 'text') {
         out.innerHTML = `<div class="text-result">${escapeHtml(claim.text)}</div>
           <button class="mini-btn" id="copyText" style="margin-top:12px">复制文本</button>`;
-        $('#copyText').addEventListener('click', () => copy(claim.text, '已复�?'));
+        $('#copyText').addEventListener('click', () => copy(claim.text, '已复制'));
       } else {
         out.innerHTML = `<div class="file-result">
           <div class="fr-icon">📄</div>
@@ -266,7 +266,7 @@
   $('#sweepBtn').addEventListener('click', async () => {
     try {
       await api('/api/admin/sweep', { method: 'POST', headers: authHeader() });
-      toast('已清�?');
+      toast('已清理');
       loadAdmin();
     } catch (e) { toast(e.message); }
   });
@@ -279,16 +279,16 @@
     try {
       const s = await api('/api/admin/stats', { headers: authHeader() });
       $('#adminStats').innerHTML = `
-        <div class="stat"><div class="num">${s.total}</div><div class="lbl">总分�?</div></div>
+        <div class="stat"><div class="num">${s.total}</div><div class="lbl">总分享</div></div>
         <div class="stat"><div class="num">${s.active}</div><div class="lbl">有效</div></div>
-        <div class="stat"><div class="num">${s.expired}</div><div class="lbl">已失�?</div></div>`;
+        <div class="stat"><div class="num">${s.expired}</div><div class="lbl">已失效</div></div>`;
       const list = await api('/api/admin/shares', { headers: authHeader() });
       const rows = list.shares.map((r) => `
         <tr>
           <td class="code-cell">${formatCode(r.code)}</td>
           <td>${r.type === 'file' ? '📄 文件' : '✏️ 文本'}</td>
-          <td>${escapeHtml(r.file_name || '�?')}</td>
-          <td>${r.download_limit > 0 ? (r.download_limit - r.downloads) : '�?'}</td>
+          <td>${escapeHtml(r.file_name || '—')}</td>
+          <td>${r.download_limit > 0 ? (r.download_limit - r.downloads) : '∞'}</td>
           <td>${fmtExpire(r.expire_at)}</td>
           <td><button class="del" data-code="${r.code}">删除</button></td>
         </tr>`).join('') || '<tr><td colspan="6" class="muted">暂无分享</td></tr>';
@@ -297,7 +297,7 @@
         b.addEventListener('click', () => delShare(b.dataset.code))
       );
     } catch (e) {
-      if (/401|未授�?/.test(e.message)) {
+      if (/401|未授权/.test(e.message)) {
         state.adminToken = '';
         localStorage.removeItem('fcb_admin_token');
         openAdmin();
@@ -306,15 +306,15 @@
   }
 
   async function delShare(code) {
-    if (!confirm('确认删除取件�? ' + code + '�?')) return;
+    if (!confirm('确认删除取件码 ' + code + '？')) return;
     try {
       await api('/api/admin/share/' + code, { method: 'DELETE', headers: authHeader() });
-      toast('已删�?');
+      toast('已删除');
       loadAdmin();
     } catch (e) { toast(e.message); }
   }
 
-  // ---------- 分享链接直达�?#r/CODE�? ----------
+  // ---------- 分享链接直达（#r/CODE） ----------
   function handleHash() {
     const m = location.hash.match(/^#r\/(.+)$/);
     if (m) {

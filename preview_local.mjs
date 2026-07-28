@@ -49,21 +49,32 @@ function readBody(req) {
     req.on('end', () => resolve(Buffer.concat(chunks)));
   });
 }
-function parseMultipartFile(body, contentType) {
+function parseMultipartFile(buf, contentType) {
   const m = /boundary=(.*?)(;|$)/.exec(contentType || '');
-  if (!m) return body.toString('utf8');
-  const boundary = '--' + m[1].trim();
-  for (const part of body.toString('utf8').split(boundary)) {
-    if (part.includes('filename=')) {
-      const idx = part.indexOf('\r\n\r\n');
-      if (idx >= 0) {
-        let content = part.slice(idx + 4);
-        if (content.endsWith('\r\n')) content = content.slice(0, -2);
+  if (!m) return buf;
+  const boundary = Buffer.from('--' + m[1].trim());
+  const sep = Buffer.from('\r\n\r\n');
+  const parts = [];
+  let start = buf.indexOf(boundary);
+  while (start >= 0) {
+    const after = start + boundary.length;
+    let end = buf.indexOf(boundary, after);
+    if (end < 0) end = buf.length;
+    parts.push(buf.subarray(after, end));
+    if (end === buf.length) break;
+    start = end;
+  }
+  for (const part of parts) {
+    if (part.includes(Buffer.from('filename='))) {
+      const h = part.indexOf(sep);
+      if (h >= 0) {
+        let content = part.subarray(h + 4);
+        if (content.length >= 2 && content[content.length - 2] === 0x0d && content[content.length - 1] === 0x0a) content = content.subarray(0, content.length - 2);
         return content;
       }
     }
   }
-  return body.toString('utf8');
+  return buf;
 }
 function sendJson(res, code, obj) {
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
