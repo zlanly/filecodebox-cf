@@ -28,6 +28,7 @@ export async function uploadToImgBed(env, request) {
     headers: { 'Content-Type': request.headers.get('Content-Type') || 'application/octet-stream' },
     body: request.body,
     redirect: 'manual',
+    duplex: 'half', // Node/undici 转发流时必须；Cloudflare 运行时忽略此字段，跨运行时安全
   });
 
   if (upstream.status >= 400) {
