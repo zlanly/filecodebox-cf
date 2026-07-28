@@ -1,0 +1,32 @@
+name = "filecodebox-cf"
+main = "src/worker.js"
+compatibility_date = "2024-11-01"
+
+# 静态前端（SPA）：/public 下的 index.html / styles.css / app.js
+[assets]
+directory = "public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# FileCodeBox 自有 D1：存放分享元数据（取件码 / 过期 / 次数 / 密码哈希）
+[[d1_databases]]
+binding = "fcb_db"
+database_name = "filecodebox"
+database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # 用 `wrangler d1 create filecodebox` 生成
+migrations_dir = "migrations"
+
+# ===== 存储后端：CloudFlare-ImgBed（已部署在 Cloudflare 的实例）=====
+# 文件二进制不经过本 Worker，而是直接委托给 ImgBed 的 /upload API（原生支持大文件/分片）。
+[vars]
+ADMIN_KEY = "change-me-please"        # 管理后台密码，务必修改
+APP_NAME = "文件快递柜"
+APP_SUBTITLE = "像取快递一样取文件 · Powered by Cloudflare + ImgBed"
+IMG_BED_URL = "https://你的-imgbed域名.com"   # 已部署的 ImgBed 地址（必填）
+# IMG_BED_UPLOAD_TOKEN = "..."        # 可选：ImgBed 的上传令牌（若开启了上传鉴权）
+# IMG_BED_UPLOAD_TOKEN_PARAM = "token" # 可选：上传令牌的 query 参数名，默认 token
+# IMG_BED_UPLOAD_CHANNEL = "cfr2"     # 可选：指定 ImgBed 上传渠道，默认由 ImgBed 决定
+# IMG_BED_ADMIN_TOKEN = "..."         # 可选：配置后删除分享会同步清理 ImgBed 侧对象
+
+# 定时清理过期 / 超额分享（Cron Trigger）
+[triggers]
+crons = ["0 4 * * *"]

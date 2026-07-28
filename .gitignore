@@ -1,0 +1,7 @@
+# 依赖与本地构建产物
+node_modules/
+.wrangler/
+
+# 本地敏感配置（不要提交；部署请用 wrangler secret put 设置）
+.dev.vars
+.env

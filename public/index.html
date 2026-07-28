@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>文件快递柜 · Cloudflare + ImgBed</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%A6%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="aurora"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">📦</span>
+      <div class="brand-text">
+        <h1 id="appName">文件快递柜</h1>
+        <p id="appSubtitle">像取快递一样取文件</p>
+      </div>
+    </div>
+    <button class="ghost-btn" id="adminBtn">管理后台</button>
+  </header>
+
+  <main class="container">
+    <section class="card switch-card">
+      <div class="tabs">
+        <button class="tab active" data-view="send">✏️ 寄件</button>
+        <button class="tab" data-view="receive">📭 取件</button>
+      </div>
+    </section>
+
+    <!-- 寄件 -->
+    <section class="card view" id="view-send">
+      <div class="seg">
+        <button class="seg-btn active" data-type="text">文本</button>
+        <button class="seg-btn" data-type="file">文件</button>
+      </div>
+
+      <div class="pane" id="pane-text">
+        <textarea id="textInput" placeholder="写点什么，生成取件码发给对方…（最多 222KB）" rows="6"></textarea>
+      </div>
+
+      <div class="pane hidden" id="pane-file">
+        <label class="dropzone" id="dropzone">
+          <input type="file" id="fileInput" hidden />
+          <div class="dz-inner">
+            <span class="dz-icon">📎</span>
+            <p>拖拽文件到此处，或 <span class="link">点击选择</span></p>
+            <p class="dz-hint" id="fileHint">由 ImgBed 处理，支持大文件 / 分片，无大小限制</p>
+          </div>
+        </label>
+        <div class="file-chip hidden" id="fileChip">
+          <span class="fc-icon">📄</span>
+          <span class="fc-name" id="fcName"></span>
+          <span class="fc-size" id="fcSize"></span>
+          <button class="fc-x" id="fileClear">✕</button>
+        </div>
+      </div>
+
+      <div class="options">
+        <label class="opt">
+          <span>过期时间</span>
+          <select id="expireSel">
+            <option value="3600000">1 小时</option>
+            <option value="86400000" selected>1 天</option>
+            <option value="604800000">7 天</option>
+            <option value="2592000000">30 天</option>
+            <option value="0">永久</option>
+          </select>
+        </label>
+        <label class="opt">
+          <span>取件次数</span>
+          <select id="dlSel">
+            <option value="1">1 次</option>
+            <option value="10" selected>10 次</option>
+            <option value="100">100 次</option>
+            <option value="0">不限</option>
+          </select>
+        </label>
+        <label class="opt grow">
+          <span>访问密码（可选）</span>
+          <input type="text" id="pwdInput" placeholder="留空则不设密码" autocomplete="off" />
+        </label>
+      </div>
+
+      <button class="primary-btn" id="sendBtn">生成取件码</button>
+
+      <div class="result hidden" id="sendResult">
+        <div class="result-head">✅ 已生成取件码</div>
+        <div class="code-box">
+          <span class="code-text" id="resultCode"></span>
+          <button class="mini-btn" id="copyCode">复制取件码</button>
+        </div>
+        <div class="link-row">
+          <input type="text" id="resultLink" readonly />
+          <button class="mini-btn" id="copyLink">复制链接</button>
+        </div>
+        <p class="result-tip" id="resultTip"></p>
+      </div>
+    </section>
+
+    <!-- 取件 -->
+    <section class="card view hidden" id="view-receive">
+      <div class="code-entry">
+        <input type="text" id="codeInput" placeholder="输入取件码，如 A1B2-C3D4" autocomplete="off" />
+        <button class="primary-btn" id="receiveBtn">取件</button>
+      </div>
+
+      <div class="pwd-row hidden" id="pwdRow">
+        <input type="password" id="receivePwd" placeholder="该分享需要密码" autocomplete="off" />
+        <button class="primary-btn" id="pwdSubmit">确认</button>
+      </div>
+
+      <div class="receive-out" id="receiveOut"></div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Powered by <b>Cloudflare Workers</b> · 存储 <b>CloudFlare-ImgBed (R2)</b></span>
+  </footer>
+
+  <!-- 管理后台弹层 -->
+  <div class="modal hidden" id="adminModal">
+    <div class="modal-card">
+      <button class="modal-x" id="adminClose">✕</button>
+      <div id="adminLogin">
+        <h2>管理后台</h2>
+        <p class="muted">请输入管理员密码（部署时配置的 ADMIN_KEY）</p>
+        <input type="password" id="adminPwd" placeholder="管理员密码" autocomplete="off" />
+        <button class="primary-btn" id="adminLoginBtn">登录</button>
+        <p class="err" id="adminErr"></p>
+      </div>
+      <div id="adminDash" class="hidden">
+        <div class="dash-head">
+          <h2>管理后台</h2>
+          <button class="ghost-btn" id="adminLogout">退出</button>
+        </div>
+        <div class="stats" id="adminStats"></div>
+        <div class="dash-actions">
+          <button class="mini-btn" id="sweepBtn">清理过期</button>
+        </div>
+        <div class="table-wrap">
+          <table class="share-table">
+            <thead>
+              <tr><th>取件码</th><th>类型</th><th>名称</th><th>剩余</th><th>过期</th><th></th></tr>
+            </thead>
+            <tbody id="shareRows"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast hidden" id="toast"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

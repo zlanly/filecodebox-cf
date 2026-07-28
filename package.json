@@ -1,0 +1,16 @@
+{
+  "name": "filecodebox-cf",
+  "version": "1.0.0",
+  "description": "FileCodeBox 的 Cloudflare 移植版，存储后端复用 CloudFlare-ImgBed (R2 + D1)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev --config wrangler.toml",
+    "deploy": "wrangler deploy --config wrangler.toml",
+    "migrate": "wrangler d1 migrations apply filecodebox --config wrangler.toml",
+    "test": "node test_local.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
