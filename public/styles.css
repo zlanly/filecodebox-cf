@@ -205,9 +205,11 @@ textarea:focus, input:focus, select:focus { border-color: var(--accent); box-sha
 
 /* Receive */
 .code-entry { display: flex; gap: 10px; }
-.code-entry input { flex: 1; font-size: 18px; letter-spacing: 2px; text-transform: uppercase; font-weight: 700; }
+.code-entry input { flex: 1; min-width: 0; font-size: 18px; letter-spacing: 2px; text-transform: uppercase; font-weight: 700; }
+.code-entry .primary-btn,
+.pwd-row .primary-btn { width: auto; flex: 0 0 auto; min-width: 88px; }
 .pwd-row { display: flex; gap: 10px; margin-top: 12px; }
-.pwd-row input { flex: 1; }
+.pwd-row input { flex: 1; min-width: 0; }
 
 .receive-out { margin-top: 18px; }
 .text-result {

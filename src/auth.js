@@ -34,16 +34,22 @@ export async function sha256(str) {
   return toHex(new Uint8Array(buf));
 }
 
-// 生成随机取件码，形如 XXXX-XXXX
-export function genCode(length = 8, group = 4) {
+// 生成随机取件码（规范化形式：无连字符、全大写）
+export function genCode(length = 8) {
   let raw = '';
   const alphabet = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
   const buf = new Uint8Array(length);
   crypto.getRandomValues(buf);
   for (let i = 0; i < length; i++) raw += alphabet[buf[i] % alphabet.length];
-  if (!group || group <= 0) return raw;
+  return raw;
+}
+
+// 把规范化取件码渲染为 XXXX-XXXX 可读形式
+export function formatCode(code, group = 4) {
+  const s = String(code).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!group || group <= 0) return s;
   const parts = [];
-  for (let i = 0; i < raw.length; i += group) parts.push(raw.slice(i, i + group));
+  for (let i = 0; i < s.length; i += group) parts.push(s.slice(i, i + group));
   return parts.join('-');
 }
 

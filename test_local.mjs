@@ -132,7 +132,7 @@ let code;
   const r = await call('POST', '/api/share', fd({ type: 'text', text: 'hello 快递柜', expire_ms: '0', download_limit: '0' }));
   eq(r.status, 200, '创建文本分享 200');
   const d = await r.json();
-  ok(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(d.code), '取件码格式 AAAA-BBBB: ' + d.code);
+  ok(/^[A-Z0-9]{8}$/.test(d.code), '取件码格式 AAAAAAAA: ' + d.code);
   code = d.code;
 
   const meta = await (await call('GET', '/api/share/' + code)).json();
