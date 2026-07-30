@@ -18,14 +18,20 @@ export async function uploadToImgBed(env, request) {
   if (!base) throw new Error('未配置 IMG_BED_URL（ImgBed 部署地址）');
 
   const url = new URL('/upload', base);
-  const param = env.IMG_BED_UPLOAD_TOKEN_PARAM || 'token';
-  if (env.IMG_BED_UPLOAD_TOKEN) url.searchParams.set(param, env.IMG_BED_UPLOAD_TOKEN);
+  // 可选：仅当显式配置 IMG_BED_UPLOAD_TOKEN_PARAM 时，才把 token 作为 query 参数附加
+  // （用于 authCode 形式的 ImgBed；ImgBed 更常见的 API Token 走下面的 Authorization: Bearer 头）
+  if (env.IMG_BED_UPLOAD_TOKEN_PARAM && env.IMG_BED_UPLOAD_TOKEN) {
+    url.searchParams.set(env.IMG_BED_UPLOAD_TOKEN_PARAM, env.IMG_BED_UPLOAD_TOKEN);
+  }
   if (env.IMG_BED_UPLOAD_CHANNEL) url.searchParams.set('uploadChannel', env.IMG_BED_UPLOAD_CHANNEL);
 
   // 流式转发：body 是 ReadableStream，运行时不会缓冲整段，大文件直穿到 ImgBed
+  // 构造请求头：ImgBed 的 API Token 通过 Authorization: Bearer 传递（最常见形态，前缀常为 imgbed_）
+  const headers = { 'Content-Type': request.headers.get('Content-Type') || 'application/octet-stream' };
+  if (env.IMG_BED_UPLOAD_TOKEN) headers['Authorization'] = 'Bearer ' + env.IMG_BED_UPLOAD_TOKEN;
   const upstream = await fetch(url.toString(), {
     method: 'POST',
-    headers: { 'Content-Type': request.headers.get('Content-Type') || 'application/octet-stream' },
+    headers,
     body: request.body,
     redirect: 'manual',
     duplex: 'half', // Node/undici 转发流时必须；Cloudflare 运行时忽略此字段，跨运行时安全

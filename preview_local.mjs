@@ -24,7 +24,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
 const PORT = parseInt(process.env.PORT || '8000', 10);
 const IMGBED_PORT = 8790;
-const IMG_BED_URL = `http://127.0.0.1:${IMGBED_PORT}`; // 纯根路径，与真实 ImgBed 部署一致
+const USE_REAL_IMGBED = process.env.FCB_IMGBED_REAL === '1';
+const IMG_BED_URL = process.env.FCB_IMGBED_URL || `http://127.0.0.1:${IMGBED_PORT}`;
 
 // ---------- 本地 D1 mock（node:sqlite） ----------
 const sqlite = new DatabaseSync(':memory:');
@@ -130,6 +131,8 @@ const env = {
   fcb_db,
   ASSETS,
   IMG_BED_URL,
+  IMG_BED_UPLOAD_TOKEN: process.env.FCB_IMGBED_UPLOAD_TOKEN || '',
+  IMG_BED_UPLOAD_TOKEN_PARAM: process.env.FCB_IMGBED_UPLOAD_TOKEN_PARAM || '',
   ADMIN_KEY: 'preview-admin',
   FILE_SECRET: 'preview-file-secret',
   APP_NAME: '文件快递柜',
@@ -139,7 +142,9 @@ const env = {
 
 // ---------- 主服务：Node HTTP <-> Web Standard Request/Response ----------
 async function proxyToImgBed(res, id) {
-  const up = await fetch(`${IMG_BED_URL}/file/${id}`);
+  // 用 URL 构造避免 IMG_BED_URL 结尾斜杠导致 //file/ 双斜杠（会触发 ImgBed SPA 回退返回 HTML）
+  const target = new URL('/file/' + id, IMG_BED_URL).toString();
+  const up = await fetch(target);
   res.writeHead(up.status, Object.fromEntries(up.headers.entries()));
   if (up.body) {
     const reader = up.body.getReader();
@@ -172,8 +177,7 @@ const server = http.createServer(async (req, res) => {
     if (response.status === 302) {
       const loc = response.headers.get('Location');
       if (loc && loc.startsWith(IMG_BED_URL)) {
-        const rel = loc.slice(IMG_BED_URL.length).replace(/^\/file\//, '/__imgbed-file/');
-        const h = new Headers(response.headers);
+        const rel = new URL(loc).pathname.replace(/^\/file\//, '/__imgbed-file/');        const h = new Headers(response.headers);
         h.set('Location', rel);
         res.writeHead(302, Object.fromEntries(h.entries()));
         res.end();
@@ -199,9 +203,13 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-imgbedServer.listen(IMGBED_PORT, '127.0.0.1', () => {
-  console.log(`[preview] ImgBed mock 运行中：http://127.0.0.1:${IMGBED_PORT}`);
-});
+if (!USE_REAL_IMGBED) {
+  imgbedServer.listen(IMGBED_PORT, '127.0.0.1', () => {
+    console.log(`[preview] ImgBed mock 运行中：http://127.0.0.1:${IMGBED_PORT}`);
+  });
+} else {
+  console.log(`[preview] 真实 ImgBed 模式：${IMG_BED_URL}`);
+}
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[preview] FileCodeBox-CF 本地预览运行中：http://0.0.0.0:${PORT}`);
 });

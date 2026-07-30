@@ -61,7 +61,8 @@
   - `IMG_BED_URL`：ImgBed 实例地址，如 `https://img.example.com`（核心，决定文件存到哪）
   - `ADMIN_KEY`：管理后台密码（建议选 **Secret** 类型）
 - **可选：**
-  - `IMG_BED_UPLOAD_TOKEN` / `IMG_BED_UPLOAD_TOKEN_PARAM`：ImgBed 上传所需 token（参数名默认 `token`）
+  - `IMG_BED_UPLOAD_TOKEN`：ImgBed 的 **API Token**（形如 `imgbed_...`），通过 `Authorization: Bearer` 请求头传给 ImgBed（这是 CloudFlare-ImgBed 上传鉴权的方式，务必用此变量）。
+    仅当你的 ImgBed 实例使用 **authCode** 方式鉴权（而非 API Token）时，才额外设置 `IMG_BED_UPLOAD_TOKEN_PARAM=authCode`（此时 token 会作为 `?authCode=` 附加到上传请求）。
   - `IMG_BED_UPLOAD_CHANNEL`：上传通道（如 `cfr2`）
   - `IMG_BED_ADMIN_TOKEN`：删除分享时同步清理 ImgBed 对象所需的管理 token
   - `APP_NAME` / `APP_SUBTITLE`：界面展示文案（不填则用内置默认值）
