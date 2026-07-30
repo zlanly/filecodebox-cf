@@ -37,45 +37,53 @@
 
 ---
 
-## 快速部署
+## 快速部署（全程网页面板，无需改代码 / 无需 CLI）
 
-### 0. 前置
-- 一个已部署（或将要部署）的 [CloudFlare-ImgBed](https://github.com/MarSeventh/CloudFlare-ImgBed) 实例，记下它的**访问地址**（如 `https://img.example.com`）。
-- 安装 `wrangler`：`npm i -g wrangler` 并 `wrangler login`。
+> 整个流程只在 Cloudflare 控制台点几下即可，仓库里的 `wrangler.toml` **不写任何密钥或占位符**，部署后直接到面板绑定。
 
-### 1. 创建 D1（仅分享元数据）
-```bash
-wrangler d1 create filecodebox
-# 把输出的 database_id 填进 wrangler.toml 的 fcb_db
-wrangler d1 migrations apply filecodebox --config wrangler.toml
-```
+### 第 0 步：准备 ImgBed 地址
+- 准备一个已部署的 [CloudFlare-ImgBed](https://github.com/MarSeventh/CloudFlare-ImgBed) 实例，记下它的**访问地址**（如 `https://img.example.com`）。本项目所有文件都存到它那里。
 
-### 2. 配置 wrangler.toml
-- `fcb_db.database_id` → 上一步生成的 id
-- `IMG_BED_URL` → ImgBed 实例地址（**核心：这就是「用 ImgBed 当存储」**）
-- 可选：
-  - `IMG_BED_UPLOAD_TOKEN` + `IMG_BED_UPLOAD_TOKEN_PARAM` → ImgBed 上传所需 token（参数名默认 `token`）
-  - `IMG_BED_UPLOAD_CHANNEL` → 指定上传通道（如 `cfr2`）
-  - `IMG_BED_ADMIN_TOKEN` → 删除分享时同步清理 ImgBed 对象所需的管理 token
-- `ADMIN_KEY` → 管理后台密码（生产建议改用 `wrangler secret put ADMIN_KEY`）
-- 本项目**不需要**绑定 ImgBed 的 `img_r2` / `img_d1`，只需配置 `IMG_BED_URL` 即可
+### 第 1 步：一键部署（自动 Fork + 部署）
+- 点击仓库顶部的 **Deploy to Cloudflare Workers** 按钮（或直接打开 `https://deploy.workers.cloudflare.com/?repository=https://github.com/zlanly/filecodebox-cf`）。
+- 按提示登录 Cloudflare、授权 GitHub、为 Fork 命名，然后点 **Deploy**。
+- 等待构建完成，页面会提示 `Your Worker is available at https://filecodebox-cf.<你的子域>.workers.dev`，并自动跳到该 Worker 的控制台页面。
 
-### 3. 部署
-```bash
-wrangler deploy --config wrangler.toml
-```
+### 第 2 步：绑定 D1 数据库（存分享元数据）
+- 在 Worker 控制台进入 **Settings → Bindings → Add → D1 Database**。
+- **Variable name** 填 `fcb_db`；**Database** 选 **Create new**，名称填 `filecodebox`，点 Create。
+- 进入刚创建的 D1 数据库控制台（左侧 **Workers & Pages → D1 → filecodebox → Console**），把仓库里 `migrations/0001_init.sql` 的全部内容粘贴进去执行，完成建表。
+  - 也可在本地用 CLI 执行：`wrangler d1 migrations apply filecodebox --config wrangler.toml`（任选其一）。
 
-### 4.（可选）本地开发
-```bash
-cp .dev.vars.example .dev.vars   # 填入本地环境变量（见下）
-wrangler dev --config wrangler.toml
-```
-`.dev.vars` 示例：
-```
-ADMIN_KEY=local-key
-FILE_SECRET=local-file-secret
-IMG_BED_URL=https://imgbed.test
-```
+### 第 3 步：设置变量与密钥
+- 回到 Worker 控制台 → **Settings → Variables and Secrets → Add**。
+- **必填：**
+  - `IMG_BED_URL`：ImgBed 实例地址，如 `https://img.example.com`（核心，决定文件存到哪）
+  - `ADMIN_KEY`：管理后台密码（建议选 **Secret** 类型）
+- **可选：**
+  - `IMG_BED_UPLOAD_TOKEN` / `IMG_BED_UPLOAD_TOKEN_PARAM`：ImgBed 上传所需 token（参数名默认 `token`）
+  - `IMG_BED_UPLOAD_CHANNEL`：上传通道（如 `cfr2`）
+  - `IMG_BED_ADMIN_TOKEN`：删除分享时同步清理 ImgBed 对象所需的管理 token
+  - `APP_NAME` / `APP_SUBTITLE`：界面展示文案（不填则用内置默认值）
+- 改完变量后，Cloudflare 会提示重新部署，点 **Deploy** 让配置生效。
+
+### 第 4 步：完成
+- 访问你的 Worker 地址即可使用。寄件 / 取件 / 管理均在前端页面完成，**全程无需再碰 `wrangler.toml`**。
+
+### （可选）本地开发
+- 仅本地调试用，不影响线上部署：
+  ```bash
+  cp .dev.vars.example .dev.vars   # 填入本地环境变量
+  wrangler dev --config wrangler.toml
+  ```
+  `.dev.vars.example` 示例：
+  ```
+  ADMIN_KEY=your-local-admin-key
+  FILE_SECRET=your-local-file-secret
+  APP_NAME=文件快递柜
+  IMG_BED_URL=https://imgbed.test   # 本地调试时改用你的 ImgBed 地址
+  ```
+  > 注意：Git 仓库里不会提交真实密钥，`wrangler.toml` 也不含任何占位符，所有配置都在面板填写，避免误泄露。
 
 ---
 
@@ -119,4 +127,4 @@ IMG_BED_URL=https://imgbed.test
 - **大文件 / 分片**：文件上传由本 Worker 把请求体**流式转发**给 ImgBed 的 `/upload`，由 ImgBed 完成存储，完全不受 Worker 请求体大小限制；分片上传同样由 ImgBed 处理。
 - **Cron 清理**：Worker 的 `scheduled` 触发器每天 04:00 清理失效分享，并在配置了管理 token 时回收 ImgBed 对象，也可在后台手动「清理过期」。
 - **无需 R2 CORS**：浏览器不再跨域直传 R2（那套预签名方案已移除），因此也无需在 R2 桶配置 CORS。跨域访问统一经本 Worker 的 302 跳转完成。
-- **安全**：密码以 SHA-256 存储；文件直链带 HMAC 防直链 token；后台接口需 Bearer token。生产环境请通过 `wrangler secret put` 设置 `ADMIN_KEY` / `FILE_SECRET` / `IMG_BED_URL` 等，**不要**把密钥写进 `wrangler.toml` 提交到仓库。
+- **安全**：密码以 SHA-256 存储；文件直链带 HMAC 防直链 token；后台接口需 Bearer token。所有密钥均通过 Cloudflare 控制台的 Variables and Secrets 设置（建议 `ADMIN_KEY` 用 Secret 类型），**不**写进 `wrangler.toml` 或提交到仓库。

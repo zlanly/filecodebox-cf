@@ -11,9 +11,8 @@
     "test": "node test_local.mjs"
   },
   "devDependencies": {
-    "wrangler": "^4.0.0"
-  },
-  "dependencies": {
+    "wrangler": "^4.0.0",
     "playwright-core": "^1.62.0"
-  }
+  },
+  "dependencies": {}
 }
