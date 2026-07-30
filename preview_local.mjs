@@ -14,7 +14,7 @@
 import http from 'node:http';
 import { Readable } from 'node:stream';
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,7 +29,7 @@ const IMG_BED_URL = process.env.FCB_IMGBED_URL || `http://127.0.0.1:${IMGBED_POR
 
 // ---------- 本地 D1 mock（node:sqlite） ----------
 const sqlite = new DatabaseSync(':memory:');
-sqlite.exec(readFileSync(path.join(__dirname, 'migrations', '0001_init.sql'), 'utf8'));
+// 不在启动时手动建表：改为由 Worker 自举 ensureSchema 在首次访问时建表（与线上一致）
 class Stmt {
   constructor(db, q) { this.db = db; this.q = q; this.params = []; }
   bind(...p) { this.params = p; return this; }

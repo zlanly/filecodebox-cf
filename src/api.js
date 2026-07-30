@@ -249,6 +249,12 @@ export async function publicConfig({ env }) {
   });
 }
 
+export async function install({ env }) {
+  // 自举建表：部署后访问 /api/install 即初始化 D1（幂等，可重复执行）
+  await db.ensureSchema(env.fcb_db);
+  return json({ ok: true, message: 'D1 数据库已初始化（表 shares 已就绪）' });
+}
+
 export async function health() {
   return json({ ok: true, service: 'filecodebox-cf', time: Date.now() });
 }

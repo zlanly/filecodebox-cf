@@ -11,6 +11,7 @@
 //   /api/admin/shares     GET   分享列表
 //   /api/admin/share/:code DELETE 删除某分享（同步清理 ImgBed 侧对象）
 //   /api/admin/sweep      POST  清理过期 / 超额分享
+//   /api/install         GET/POST  首次部署初始化 D1 表结构（幂等，也可由首次访问自动建表）
 //   /api/config           GET   前端公共配置
 //   /api/health           GET   健康检查
 
@@ -29,6 +30,8 @@ function compile(pattern) {
 }
 
 const ROUTES = [
+  { method: 'GET', pattern: '/api/install', handler: api.install },
+  { method: 'POST', pattern: '/api/install', handler: api.install },
   { method: 'GET', pattern: '/api/health', handler: api.health },
   { method: 'GET', pattern: '/api/config', handler: api.publicConfig },
   { method: 'POST', pattern: '/api/share', handler: api.createShare },

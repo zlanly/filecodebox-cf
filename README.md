@@ -52,8 +52,9 @@
 ### 第 2 步：绑定 D1 数据库（存分享元数据）
 - 在 Worker 控制台进入 **Settings → Bindings → Add → D1 Database**。
 - **Variable name** 填 `fcb_db`；**Database** 选 **Create new**，名称填 `filecodebox`，点 Create。
-- 进入刚创建的 D1 数据库控制台（左侧 **Workers & Pages → D1 → filecodebox → Console**），把仓库里 `migrations/0001_init.sql` 的全部内容粘贴进去执行，完成建表。
-  - 也可在本地用 CLI 执行：`wrangler d1 migrations apply filecodebox --config wrangler.toml`（任选其一）。
+- **无需手动建表**：绑定好 `fcb_db` 即可，数据表由 Worker 在**首次访问时自动创建**（运行时执行 `CREATE TABLE IF NOT EXISTS`，幂等可重复）。
+  - 想显式初始化？部署后访问一次 `https://你的Worker地址/api/install` 即可，返回 `{"ok":true}`。
+  - 仓库里的 `migrations/0001_init.sql` 仅作参考与离线备份，**正常情况下你不需要执行它**。
 
 ### 第 3 步：设置变量与密钥
 - 回到 Worker 控制台 → **Settings → Variables and Secrets → Add**。
@@ -118,6 +119,7 @@
 | `GET` | `/api/admin/shares` | 分享列表 |
 | `DELETE` | `/api/admin/share/:code` | 删除分享（可选同步清理 ImgBed 对象） |
 | `POST` | `/api/admin/sweep` | 清理过期 / 超额分享 |
+| `GET`/`POST` | `/api/install` | 首次部署初始化 D1 表结构（幂等；也可由首次访问自动建表） |
 | `GET` | `/api/config`、`/api/health` | 公共配置 / 健康检查 |
 
 ---
