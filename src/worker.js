@@ -5,7 +5,7 @@
 //   /api/share/:code      GET   查看分享元信息（不消耗）
 //   /api/share/:code/claim POST 取件（消耗一次，文本直接返回 / 文件返回防直链 URL）
 //   /api/imgbed/upload    POST  把文件流式代理到 ImgBed 的 /upload（原生支持大文件）
-//   /file/:key?t=TOKEN    GET   校验防直链 token 后 302 跳转到 ImgBed 原地址
+//   /file/:key?t=TOKEN    GET   校验防直链 token 后：ImgBed 模式 302 跳转；Telegram 模式服务端取回字节返回
 //   /api/admin/login      POST  管理员登录，返回 token
 //   /api/admin/stats      GET   统计
 //   /api/admin/shares     GET   分享列表
@@ -18,6 +18,7 @@
 import * as api from './api.js';
 import * as storage from './storage.js';
 import * as db from './db.js';
+import * as telegram from './telegram.js';
 
 // 编译 "/api/share/:code/claim" -> 正则 + 参数名
 function compile(pattern) {
@@ -36,7 +37,11 @@ const ROUTES = [
   { method: 'GET', pattern: '/api/config', handler: api.publicConfig },
   { method: 'POST', pattern: '/api/share', handler: api.createShare },
   { method: 'POST', pattern: '/api/imgbed/upload', handler: async (ctx) => {
-    const r = await storage.uploadToImgBed(ctx.env, ctx.request);
+    const env = ctx.env;
+    // 配置了 Telegram（TG_BOT_TOKEN + TG_CHAT_ID）则直传 Telegram；否则走外部 ImgBed
+    const r = (env.TG_BOT_TOKEN && env.TG_CHAT_ID)
+      ? await telegram.uploadToTelegram(env, ctx.request)
+      : await storage.uploadToImgBed(env, ctx.request);
     return new Response(JSON.stringify(r), {
       status: 200,
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
@@ -44,7 +49,17 @@ const ROUTES = [
   } },
   { method: 'GET', pattern: '/api/share/:code', handler: api.getShareMeta },
   { method: 'POST', pattern: '/api/share/:code/claim', handler: api.claimShare },
-  { method: 'GET', pattern: '/file/:key', handler: (ctx) => storage.serveFromImgBed(ctx.env, ctx.request, ctx.params.key) },
+  { method: 'GET', pattern: '/file/:key', handler: async (ctx) => {
+    const { env } = ctx;
+    if (env.TG_BOT_TOKEN && env.TG_CHAT_ID) {
+      const row = await db.getShareByFileKey(env.fcb_db, ctx.params.key);
+      return telegram.serveFromTelegram(
+        env, ctx.request, ctx.params.key,
+        row ? { file_name: row.file_name, file_type: row.file_type } : null
+      );
+    }
+    return storage.serveFromImgBed(env, ctx.request, ctx.params.key);
+  } },
   { method: 'POST', pattern: '/api/admin/login', handler: api.adminLogin },
   { method: 'GET', pattern: '/api/admin/stats', handler: api.adminStats },
   { method: 'GET', pattern: '/api/admin/shares', handler: api.adminList },

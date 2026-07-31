@@ -2,5 +2,13 @@ ADMIN_KEY=your-local-admin-key
 ADMIN_API_TOKEN=your-local-admin-api-token
 FILE_SECRET=your-local-file-secret
 APP_NAME=文件快递柜
+
+# 存储后端二选一：
+# 1) ImgBed（默认，不填下面 TG_* 时生效）
 IMG_BED_URL=https://imgbed.test
 IMG_BED_UPLOAD_TOKEN=imgbed_your_api_token
+
+# 2) Telegram（同时填 TG_BOT_TOKEN 与 TG_CHAT_ID 即切到 Telegram，IMG_BED_URL 可留空）
+# TG_BOT_TOKEN=123456:ABC-DEFyourbottoken
+# TG_CHAT_ID=-1001234567890
+# TG_API=

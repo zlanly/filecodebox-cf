@@ -128,6 +128,15 @@ export async function countActive(db) {
 }
 
 // 清理过期 / 超额分享：返回被删除的 file_key 列表，供调用方清理 R2
+export async function getShareByFileKey(db, key) {
+  if (!key) return null;
+  const row = await db
+    .prepare(`SELECT code, file_name, file_type, file_size FROM shares WHERE file_key = ?`)
+    .bind(key)
+    .first();
+  return row || null;
+}
+
 export async function sweepExpired(db, now = Date.now()) {
   await ensureSchema(db);
   const expired = await db

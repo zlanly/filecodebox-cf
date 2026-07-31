@@ -250,7 +250,7 @@ export async function publicConfig({ env }) {
     subtitle: appSubtitle(env),
     expirePresets: EXPIRE_PRESETS,
     downloadPresets: DOWNLOAD_PRESETS,
-    storage: 'CloudFlare-ImgBed (API)',
+    storage: env.TG_BOT_TOKEN && env.TG_CHAT_ID ? 'Telegram (Bot API)' : 'CloudFlare-ImgBed (API)',
   });
 }
 

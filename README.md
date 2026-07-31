@@ -2,14 +2,16 @@
 
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?repository=https://github.com/zlanly/filecodebox-cf)
 
-**FileCodeBox 的 Cloudflare 移植版**，文件存储后端直接复用已部署的 [CloudFlare-ImgBed](https://github.com/MarSeventh/CloudFlare-ImgBed) —— 通过它的 HTTP API 委托上传 / 取件 / 清理，而非自己绑定 R2/D1。
+**FileCodeBox 的 Cloudflare 移植版**。文件存储后端**二选一**：复用已部署的 [CloudFlare-ImgBed](https://github.com/MarSeventh/CloudFlare-ImgBed)（通过 HTTP API 委托），**或直接直连 Telegram Bot API** 把文件发到你的频道/群组——后者无需额外部署任何服务、无需对接第三方实例。
 
 - 后端：**零依赖 Cloudflare Worker**（纯 Web 标准 API，自研轻量路由，无需 `npm install` 即可部署）
-- 存储：**委托 CloudFlare-ImgBed 的 `/upload` API**。ImgBed 本就跑在 Cloudflare 上，原生支持大文件 / 分片上传 / R2 存储与图床后台，文件自然出现在 ImgBed 图床里
+- 存储（二选一，看是否配置 `TG_BOT_TOKEN`）：
+  - **CloudFlare-ImgBed**（默认，未配置 Telegram 时）：委托其 `/upload` API，原生支持大文件 / 分片上传 / R2 存储与图床后台
+  - **Telegram Bot API**（配置 `TG_BOT_TOKEN` + `TG_CHAT_ID` 时）：文件直发你的频道/群组，**无需额外部署任何服务**，取件时由 Worker 在服务端用 bot token 取回字节（token 不出服务端）
 - 元数据：分享记录（取件码 / 过期 / 取件次数 / 密码）存于 FileCodeBox 自有 D1（`fcb_db`）
 - 前端：温暖清新风格的单页应用（SPlayer 风），原生 JS，无构建步骤
 
-> 设计要点：FileCodeBox 只做「取件码层」。文件二进制**不**经由本 Worker 落盘，而是流式代理给 ImgBed 的 `/upload`（不缓冲，大文件直穿），取件时返回带 HMAC 防直链 token 的 `/file/:key` 直链，由 Worker 302 跳转到 ImgBed 原地址。因此本项目**不再需要直接绑定** ImgBed 的 R2 / D1。
+> 设计要点：FileCodeBox 只做「取件码层」。文件二进制**不**经由本 Worker 落盘。**ImgBed 模式**下，文件流式代理给 ImgBed 的 `/upload`（不缓冲，大文件直穿），取件时由 Worker 302 跳转到 ImgBed 原地址；**Telegram 模式**下，文件直发 Telegram，取件时由 Worker 在服务端用 bot token 调 `getFile` 取回字节并流式返回（bot token 始终留在服务端，**不暴露给浏览器**）。因此本项目**不再需要直接绑定** ImgBed 的 R2 / D1。
 
 ---
 
@@ -22,18 +24,17 @@
 │  寄件 POST /api/share ──┐                                      │
 │  取件 GET/POST /api/share/:code ─┐                             │
 │  上传 POST /api/imgbed/upload ──┐ 流式代理 ──► ImgBed /upload  │
-│  文件 GET /file/:key  ◄──── 校验 token 后 302 跳转到 ImgBed    │
+│  文件 GET /file/:key  ◄──── 校验 token 后：ImgBed 302 / Telegram 服务端取回字节   │
 │  管理 /api/admin/*                                               │
 └───────────────┬────────────────────────────┬───────────────────┘
                 │                            │
-         ┌──────▼──────┐              ┌───────▼──────────────┐
-         │  D1 fcb_db  │              │  CloudFlare-ImgBed    │
-         │ 分享元数据   │              │  （R2 + 图床后台）      │
-         └─────────────┘              │  文件二进制 / 大文件    │
-                                      └────────────────────────┘
+         ┌──────▼──────┐              ┌──────── 存储后端（二选一）─────────┐
+         │  D1 fcb_db  │              │  CloudFlare-ImgBed（/upload, R2+图床） │
+         │ 分享元数据   │              │  或  Telegram Bot API（直发频道/群组）  │
+         └─────────────┘              └────────────────────────────────────┘
 ```
 
-文件本体完全由 ImgBed 负责：上传走 `/upload`（原生支持大文件与分片），取件走 `/file/<key>`（由 ImgBed 处理 Range / 流式传输）。删除分享时本 Worker 可选同步调用 ImgBed 的 `/api/manage/delete/<id>` 清理对象。
+文件本体的存储后端可二选一（由是否配置 `TG_BOT_TOKEN` 决定）：**ImgBed 模式**下，上传走其 `/upload`（原生支持大文件与分片），取件走 `/file/<key>` 由 ImgBed 处理 Range / 流式传输，删除分享时本 Worker 可选同步调用 ImgBed 的 `/api/manage/delete/<id>` 清理对象；**Telegram 模式**下，文件通过 Bot API `sendDocument` 直发指定频道/群组，取件时由 Worker 在服务端用 bot token 调 `getFile` 取回字节并流式返回（bot token 不出服务端），删除分享时**不**清理 Telegram 侧消息（保留在频道/群里）。
 
 ---
 
@@ -41,8 +42,10 @@
 
 > 整个流程只在 Cloudflare 控制台点几下即可，仓库里的 `wrangler.toml` **不写任何密钥或占位符**，部署后直接到面板绑定。
 
-### 第 0 步：准备 ImgBed 地址
-- 准备一个已部署的 [CloudFlare-ImgBed](https://github.com/MarSeventh/CloudFlare-ImgBed) 实例，记下它的**访问地址**（如 `https://img.example.com`）。本项目所有文件都存到它那里。
+### 第 0 步：选择存储后端（ImgBed 或 Telegram 二选一）
+- **用 ImgBed（默认）**：准备一个已部署的 [CloudFlare-ImgBed](https://github.com/MarSeventh/CloudFlare-ImgBed) 实例，记下它的**访问地址**（如 `https://img.example.com`）。本项目所有文件都存到它那里。
+- **用 Telegram（免部署，推荐不想维护额外服务时）**：准备一个 BotFather 申请的 **Bot Token**，以及一个**频道/群组 ID**（机器人需对该会话有发消息权限）。详见下方「直连 Telegram 存储」一节。
+- 两者都配会优先走 Telegram；只配 `IMG_BED_URL` 则走 ImgBed。
 
 ### 第 1 步：一键部署（自动 Fork + 部署）
 - 点击仓库顶部的 **Deploy to Cloudflare Workers** 按钮（或直接打开 `https://deploy.workers.cloudflare.com/?repository=https://github.com/zlanly/filecodebox-cf`）。
@@ -58,17 +61,19 @@
 
 ### 第 3 步：设置变量与密钥
 - 回到 Worker 控制台 → **Settings → Variables and Secrets → Add**。
-- **必填：**
-  - `IMG_BED_URL`：ImgBed 实例地址，如 `https://img.example.com`（核心，决定文件存到哪）
-  - 管理凭证（**二选一**）：
-    - `ADMIN_API_TOKEN`（**推荐**，Secret 类型）：设一个随机串。配置后管理接口直接 `Authorization: Bearer <ADMIN_API_TOKEN>` 调用，**无需登录**，类 ImgBed 的 API Token 用法。
-    - `ADMIN_KEY`：管理后台**密码**（Secret 类型）。走前端登录拿 token 的旧流程。
-    - 两者都设也可；只设其中一个即可。
+- **存储后端（二选一，决定文件存到哪）：**
+  - **用 ImgBed（默认）**：`IMG_BED_URL` —— 已部署的 ImgBed 实例地址，如 `https://img.example.com`。（不要同时设下面两个 TG 变量，否则会切到 Telegram）
+  - **用 Telegram（免部署）**：同时设 `TG_BOT_TOKEN`（Bot Token）和 `TG_CHAT_ID`（频道/群组 ID）。配置后文件直存 Telegram，`IMG_BED_URL` 可留空。详见下方「直连 Telegram 存储」。
+- **管理凭证（二选一）：**
+  - `ADMIN_API_TOKEN`（**推荐**，Secret 类型）：设一个随机串。配置后管理接口直接 `Authorization: Bearer <ADMIN_API_TOKEN>` 调用，**无需登录**，类 ImgBed 的 API Token 用法。
+  - `ADMIN_KEY`：管理后台**密码**（Secret 类型）。走前端登录拿 token 的旧流程。
+  - 两者都设也可；只设其中一个即可。
 - **可选：**
+  - `TG_API`：仅 Telegram 模式用。自定义反代域名，用于 `api.telegram.org` 被墙的环境；留空则用官方 API（Cloudflare Worker 出网到 Telegram 一般通畅）。
   - `IMG_BED_UPLOAD_TOKEN`：ImgBed 的 **API Token**（形如 `imgbed_...`），通过 `Authorization: Bearer` 请求头传给 ImgBed（这是 CloudFlare-ImgBed 上传鉴权的方式，务必用此变量）。
     仅当你的 ImgBed 实例使用 **authCode** 方式鉴权（而非 API Token）时，才额外设置 `IMG_BED_UPLOAD_TOKEN_PARAM=authCode`（此时 token 会作为 `?authCode=` 附加到上传请求）。
   - `IMG_BED_UPLOAD_CHANNEL`：上传通道（如 `cfr2`）
-  - `IMG_BED_ADMIN_TOKEN`：删除分享时同步清理 ImgBed 对象所需的管理 token
+  - `IMG_BED_ADMIN_TOKEN`：删除分享时同步清理 ImgBed 对象所需的管理 token（仅 ImgBed 模式生效）
   - `APP_NAME` / `APP_SUBTITLE`：界面展示文案（不填则用内置默认值）
 - 改完变量后，Cloudflare 会提示重新部署，点 **Deploy** 让配置生效。
 
@@ -86,9 +91,49 @@
   ADMIN_KEY=your-local-admin-key
   FILE_SECRET=your-local-file-secret
   APP_NAME=文件快递柜
-  IMG_BED_URL=https://imgbed.test   # 本地调试时改用你的 ImgBed 地址
+  IMG_BED_URL=https://imgbed.test   # 本地调试时改用你的 ImgBed 地址（走 ImgBed 模式）
+  # TG_BOT_TOKEN=...                # 同时填 TG_BOT_TOKEN 与 TG_CHAT_ID 即切到 Telegram 模式
+  # TG_CHAT_ID=...
   ```
-  > 注意：Git 仓库里不会提交真实密钥，`wrangler.toml` 也不含任何占位符，所有配置都在面板填写，避免误泄露。
+  > 注意：Git 仓库里不会提交真实密钥，`wrangler.toml` 也不含任何占位符，所有配置都在面板填写，避免误泄露。本地验证 Telegram 模式可用内置 mock：`FCB_TG_MODE=1 PORT=8088 node preview_local.mjs` 后 `node tg_e2e_test.mjs`（详见「直连 Telegram 存储」）。
+
+---
+
+## 直连 Telegram 存储（无需 ImgBed）
+
+如果你不想额外部署 / 对接一个 ImgBed 实例，**直接配置 Telegram 即可让文件直存 Telegram，无需任何第三方服务**。本项目把 [CloudFlare-ImgBed](https://github.com/MarSeventh/CloudFlare-ImgBed) 的 Telegram 存储逻辑（`telegramAPI.js`）内置进了源码（`src/telegram.js`），因此只需在 Worker 配置三个变量即可启用。
+
+判定规则（在 `src/worker.js` 里）：当 `TG_BOT_TOKEN` 与 `TG_CHAT_ID` **同时**配置时走 Telegram；否则走 ImgBed。
+
+### 配置
+
+在 Cloudflare 控制台 **Settings → Variables and Secrets** 添加：
+
+| 变量 | 类型 | 说明 |
+|------|------|------|
+| `TG_BOT_TOKEN` | Secret | BotFather 申请的 Bot Token，形如 `123456:ABC-DEF...`。机器人需对目标会话有**发送消息**权限 |
+| `TG_CHAT_ID` | Secret/变量 | 文件要发往的频道 / 群组 ID。私聊发给自己可用你的用户 id（给 `@userinfobot` 发消息可查） |
+| `TG_API` | 变量（可选） | 自定义反代域名，用于 `api.telegram.org` 被墙的环境；留空用官方 API |
+
+> 权限提示：把机器人加进目标频道/群组并设为**管理员**（至少「发送消息」权限）；私聊场景则直接用自己的用户 id 当 `TG_CHAT_ID`，机器人给你自己发文件。
+
+### 行为
+
+- **上传**：文件经 `/api/imgbed/upload` 时直接 `sendDocument` 到你的频道/群组，返回 `{ id: file_id, src: "tg://<file_id>" }`；分享记录的 `file_key` 即 Telegram `file_id`。
+- **取件**：`/file/:key?t=TOKEN` 先校验 HMAC 防直链 token，再在服务端用 bot token 调 `getFile` 取回字节并流式返回。**bot token 始终留在服务端，不会下发给浏览器**（与 ImgBed 的 302 不同，这里不暴露任何 token，更安全）。
+- **文件名**：含中文等非 ASCII 字符时按 RFC 5987 用 `filename*` 编码，浏览器能正确下载出中文名。
+- **删除**：删除分享时**不会**清理 Telegram 侧消息（文件仍保留在频道/群里），介意的话定期清理频道即可。
+
+> ⚠️ **大小限制**：Telegram Bot API 的 `getFile` 取回**单文件上限约 20MB**（`sendDocument` 发送上限 50MB，但取回被限制在 20MB）。**超过约 20MB 的文件在取件时会失败**。若需更大文件，请改用 ImgBed 后端（无此限制）。
+
+### 本地调试（mock Telegram）
+
+本地预览内置了 Telegram mock，无需真实 Bot 即可端到端验证：
+
+```bash
+FCB_TG_MODE=1 PORT=8088 node preview_local.mjs   # 拦截 api.telegram.org，内存模拟 sendDocument/getFile
+BASE=http://127.0.0.1:8088 node tg_e2e_test.mjs  # 上传→分享→取件→下载字节比对
+```
 
 ---
 
@@ -113,10 +158,10 @@
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `POST` | `/api/share` | 创建分享。`multipart`：`type=text\|file`、`text`、`file_key`+`file_name`+`file_type`+`file_size`（文件先经 `/api/imgbed/upload` 上传）、`expire_ms`、`download_limit`、`password` |
-| `POST` | `/api/imgbed/upload` | 把文件流式代理到 ImgBed 的 `/upload`，返回 `{ id, src }`（`id` 即 ImgBed 文件 key） |
+| `POST` | `/api/imgbed/upload` | 文件上传入口。Telegram 模式直发 Bot API `sendDocument`（返回 `tg://<file_id>`）；ImgBed 模式流式代理到其 `/upload`，返回 `{ id, src }`（`id` 即 ImgBed 文件 key） |
 | `GET` | `/api/share/:code` | 分享元信息（不消耗） |
 | `POST` | `/api/share/:code/claim` | 取件（消耗一次）。文本直接返回；文件返回 `/file/:key?t=TOKEN` |
-| `GET` | `/file/:key?t=TOKEN` | 校验防直链 token 后 302 跳转到 ImgBed 原地址（Range / 大文件由 ImgBed 负责） |
+| `GET` | `/file/:key?t=TOKEN` | 校验防直链 token 后：ImgBed 模式 302 跳转到 ImgBed 原地址；Telegram 模式由 Worker 服务端取回字节返回（bot token 不出服务端） |
 | `POST` | `/api/admin/login` | 登录（用 `ADMIN_KEY` 密码）；若已设 `ADMIN_API_TOKEN` 可跳过本步，直接 `Bearer <token>` 调管理接口 |
 | `GET` | `/api/admin/stats` | 统计（需 `Authorization: Bearer <token>`；设 `ADMIN_API_TOKEN` 后可直接用该 token） |
 | `GET` | `/api/admin/shares` | 分享列表（需 Bearer token） |
@@ -156,7 +201,7 @@ curl -X DELETE -H "Authorization: Bearer $FCB_TOKEN" $FCB/api/admin/share/ABCD12
 
 ## 说明与边界
 
-- **存储即 ImgBed**：文件二进制只存在于 ImgBed 的 R2，并通过 ImgBed 的 `/upload` 接口写入，因此这些文件也能被 ImgBed 自身的 `/file/<key>` 路由直接访问与管理。删除分享会（在配置了 `IMG_BED_ADMIN_TOKEN` 时）同步删除 ImgBed 侧对象。
+- **存储后端**：文件二进制只存在于你选的后端——ImgBed 的 R2（经其 `/upload` 写入，可被 ImgBed 自身 `/file/<key>` 直接访问）或 Telegram 的频道/群组（经 Bot API `sendDocument` 写入）。ImgBed 模式下删除分享会（配置了 `IMG_BED_ADMIN_TOKEN` 时）同步删除 ImgBed 侧对象；Telegram 模式下删除分享仅删取件码，**不**删 Telegram 侧消息。
 - **大文件 / 分片**：文件上传由本 Worker 把请求体**流式转发**给 ImgBed 的 `/upload`，由 ImgBed 完成存储，完全不受 Worker 请求体大小限制；分片上传同样由 ImgBed 处理。
 - **Cron 清理**：Worker 的 `scheduled` 触发器每天 04:00 清理失效分享，并在配置了管理 token 时回收 ImgBed 对象，也可在后台手动「清理过期」。
 - **无需 R2 CORS**：浏览器不再跨域直传 R2（那套预签名方案已移除），因此也无需在 R2 桶配置 CORS。跨域访问统一经本 Worker 的 302 跳转完成。

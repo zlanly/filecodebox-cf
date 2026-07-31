@@ -27,6 +27,52 @@ const IMGBED_PORT = 8790;
 const USE_REAL_IMGBED = process.env.FCB_IMGBED_REAL === '1';
 const IMG_BED_URL = process.env.FCB_IMGBED_URL || `http://127.0.0.1:${IMGBED_PORT}`;
 
+const USE_TG_MOCK = process.env.FCB_TG_MODE === '1';
+
+// Telegram 存储 mock（仅 FCB_TG_MODE=1 时启用）：拦截 api.telegram.org 的 Bot API 调用，
+// 在内存中模拟 sendDocument / getFile / file 取回，便于本地端到端验证 Telegram 存储逻辑。
+const tgStore = new Map();
+let tgCounter = 0;
+async function mockTelegram(urlStr, opts) {
+  const u = new URL(urlStr);
+  let sub;
+  const m = u.pathname.match(/^\/bot[^/]+(\/.*)$/); // /bot<token>/sendDocument、/bot<token>/getFile
+  if (m) sub = m[1];
+  else {
+    const fm = u.pathname.match(/^\/file\/bot[^/]+(\/.*)$/); // /file/bot<token>/tgfiles/<id>
+    sub = fm ? '/file' + fm[1] : u.pathname;
+  }
+  if (sub === '/sendDocument' && opts && opts.method === 'POST') {
+    const fd = await new Request(urlStr, opts).formData();
+    const file = fd.get('document');
+    const id = 'tg-' + (++tgCounter);
+    const buf = Buffer.from(await file.arrayBuffer());
+    tgStore.set(id, { bytes: buf, contentType: file.type || 'application/octet-stream', fileName: file.name || 'file' });
+    return new Response(JSON.stringify({ ok: true, result: { document: { file_id: id, file_name: file.name || 'file', file_size: buf.length } } }), { headers: { 'Content-Type': 'application/json' } });
+  }
+  if (sub === '/getFile') {
+    const id = u.searchParams.get('file_id');
+    if (tgStore.has(id)) return new Response(JSON.stringify({ ok: true, result: { file_path: 'tgfiles/' + id } }), { headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ ok: false, description: 'not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+  }
+  if (sub.startsWith('/file/tgfiles/')) {
+    const id = sub.slice('/file/tgfiles/'.length);
+    const f = tgStore.get(id);
+    if (!f) return new Response('not found', { status: 404 });
+    return new Response(f.bytes, { headers: { 'Content-Type': f.contentType, 'Content-Length': String(f.bytes.length) } });
+  }
+  return new Response('mock telegram 404: ' + sub, { status: 404 });
+}
+if (USE_TG_MOCK) {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (url, opts) => {
+    const u = typeof url === 'string' ? url : (url && url.url);
+    if (u && u.includes('api.telegram.org')) return mockTelegram(u, opts);
+    return realFetch(url, opts);
+  };
+  console.log('[preview] Telegram 存储 mock 已启用（拦截 api.telegram.org）');
+}
+
 // ---------- 本地 D1 mock（node:sqlite） ----------
 const sqlite = new DatabaseSync(':memory:');
 // 不在启动时手动建表：改为由 Worker 自举 ensureSchema 在首次访问时建表（与线上一致）
@@ -133,6 +179,8 @@ const env = {
   IMG_BED_URL,
   IMG_BED_UPLOAD_TOKEN: process.env.FCB_IMGBED_UPLOAD_TOKEN || '',
   IMG_BED_UPLOAD_TOKEN_PARAM: process.env.FCB_IMGBED_UPLOAD_TOKEN_PARAM || '',
+  TG_BOT_TOKEN: USE_TG_MOCK ? (process.env.FCB_TG_TOKEN || '12345:fakeToken') : '',
+  TG_CHAT_ID: USE_TG_MOCK ? (process.env.FCB_TG_CHAT || '-100123456') : '',
   ADMIN_KEY: 'preview-admin',
   ADMIN_API_TOKEN: process.env.FCB_ADMIN_API_TOKEN || '',
   FILE_SECRET: 'preview-file-secret',
@@ -204,10 +252,12 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-if (!USE_REAL_IMGBED) {
+if (!USE_REAL_IMGBED && !USE_TG_MOCK) {
   imgbedServer.listen(IMGBED_PORT, '127.0.0.1', () => {
     console.log(`[preview] ImgBed mock 运行中：http://127.0.0.1:${IMGBED_PORT}`);
   });
+} else if (USE_TG_MOCK) {
+  console.log('[preview] Telegram 模式：跳过 ImgBed mock（文件直存 Telegram）');
 } else {
   console.log(`[preview] 真实 ImgBed 模式：${IMG_BED_URL}`);
 }
