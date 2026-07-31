@@ -125,9 +125,10 @@
       <button class="modal-x" id="adminClose">✕</button>
       <div id="adminLogin">
         <h2>管理后台</h2>
-        <p class="muted">请输入管理员密码（部署时配置的 ADMIN_KEY）</p>
-        <input type="password" id="adminPwd" placeholder="管理员密码" autocomplete="off" />
+        <p class="muted">请输入管理员密码（ADMIN_KEY）；若部署时配置了 <code>ADMIN_API_TOKEN</code>，可直接用它作为 Bearer token 调用管理接口（无需登录），也可把该 token 填到下方密码框完成登录。</p>
+        <input type="password" id="adminPwd" placeholder="管理员密码 / ADMIN_API_TOKEN" autocomplete="off" />
         <button class="primary-btn" id="adminLoginBtn">登录</button>
+        <p class="muted small">提示：管理接口也支持 <code>Authorization: Bearer &lt;ADMIN_API_TOKEN&gt;</code> 直接调用，详见仓库 README 的「管理接口调用示例」。</p>
         <p class="err" id="adminErr"></p>
       </div>
       <div id="adminDash" class="hidden">

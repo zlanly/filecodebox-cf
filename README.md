@@ -127,6 +127,33 @@
 
 ---
 
+## 管理接口调用示例（ADMIN_API_TOKEN）
+
+部署时在控制台配置 `ADMIN_API_TOKEN`（Secret 类型）后，**无需登录**，直接用 Bearer token 调用管理接口（类 ImgBed 的 API Token 用法）：
+
+```bash
+# 1) 准备变量
+export FCB_TOKEN="你的ADMIN_API_TOKEN"
+export FCB="https://你的Worker地址"
+
+# 2) 统计
+curl -H "Authorization: Bearer $FCB_TOKEN" $FCB/api/admin/stats
+
+# 3) 分享列表
+curl -H "Authorization: Bearer $FCB_TOKEN" $FCB/api/admin/shares
+
+# 4) 清理过期 / 超额分享
+curl -X POST -H "Authorization: Bearer $FCB_TOKEN" $FCB/api/admin/sweep
+
+# 5) 删除某条分享
+curl -X DELETE -H "Authorization: Bearer $FCB_TOKEN" $FCB/api/admin/share/ABCD1234
+```
+
+若你更习惯网页操作：打开前端「管理后台」，把 `ADMIN_API_TOKEN` 当作密码填入也能登录（登录后前端自动用该 token 作为 Bearer 调用接口）。只设了 `ADMIN_KEY` 密码的环境仍走原登录流程，两者兼容。
+
+
+---
+
 ## 说明与边界
 
 - **存储即 ImgBed**：文件二进制只存在于 ImgBed 的 R2，并通过 ImgBed 的 `/upload` 接口写入，因此这些文件也能被 ImgBed 自身的 `/file/<key>` 路由直接访问与管理。删除分享会（在配置了 `IMG_BED_ADMIN_TOKEN` 时）同步删除 ImgBed 侧对象。
