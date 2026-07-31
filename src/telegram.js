@@ -8,8 +8,33 @@ import { fileToken } from './auth.js';
 //   TG_CHAT_ID   : 文件要发往的频道 / 群组 ID（机器人需为该会话管理员；私聊可用自己的 id）
 //   TG_API       : 可选，自定义反代域名（用于 api.telegram.org 被墙的环境），留空则用官方 API
 //
+// 大文件：Telegram sendDocument 单次发送上限 50MB，但 getFile 取回约 20MB 受限。
+// 因此超过 CHUNK_SIZE(16MB) 的文件自动分片——每片单独 sendDocument，取件时按序流式重组。
+// 分片元信息编码进 file_key（base64url 的 JSON 数组），无需额外存储。
+//
 // 安全说明：取件时本 Worker 在服务端用 bot token 调 getFile 取回字节并流式返回给浏览器，
 // bot token 始终留在服务端，不会下发给客户端（与 ImgBed 的 302 不同，这里不暴露 token）。
+
+// 分片大小：卡 getFile 下载上限 20MB，留 4MB 余量（与 CloudFlare-ImgBed 一致）
+const CHUNK_SIZE = 16 * 1024 * 1024; // 16MiB
+// 分片数上限（避免 Worker CPU 超时 / D1 value 过大）：50 片 ≈ 800MB
+const MAX_CHUNKS = 50;
+
+// base64url 编解码（纯 ASCII 的 chunks JSON，跨 Cloudflare Workers / Node 均可用）
+function toB64Url(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function fromB64Url(s) {
+  s = s.replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  const bin = atob(s);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
 
 export class TelegramAPI {
   constructor(botToken, proxyUrl = '') {
@@ -86,7 +111,9 @@ export class TelegramAPI {
   }
 }
 
-// 上传：把请求里的文件发给 Telegram，返回 { id: file_id, src }
+// 上传：把请求里的文件发给 Telegram。
+// 小文件（<=16MB）单发，file_key = 纯 file_id（与原格式兼容）；
+// 大文件分片，file_key = "c:" + base64url(JSON 分片数组)，取件时据此重组。
 export async function uploadToTelegram(env, request) {
   if (!env.TG_BOT_TOKEN) throw new Error('未配置 TG_BOT_TOKEN（Telegram Bot Token）');
   if (!env.TG_CHAT_ID) throw new Error('未配置 TG_CHAT_ID（文件要发往的频道/群组 ID）');
@@ -95,15 +122,66 @@ export async function uploadToTelegram(env, request) {
   if (!file) throw new Error('未找到上传文件');
 
   const tg = new TelegramAPI(env.TG_BOT_TOKEN, env.TG_API || '');
-  const resp = await tg.sendFile(file, env.TG_CHAT_ID, 'sendDocument', 'document', '', file.name || 'file');
-  const info = tg.getFileInfo(resp);
-  if (!info || !info.file_id) {
-    throw new Error('Telegram 未返回 file_id: ' + JSON.stringify(resp).slice(0, 200));
+  const fileSize = file.size ?? (file.byteLength || 0);
+  const fileName = file.name || 'file';
+
+  // 小文件：直接 sendDocument，file_key 用纯 file_id（向后兼容）
+  if (fileSize <= CHUNK_SIZE) {
+    const resp = await tg.sendFile(file, env.TG_CHAT_ID, 'sendDocument', 'document', '', fileName);
+    const info = tg.getFileInfo(resp);
+    if (!info || !info.file_id) {
+      throw new Error('Telegram 未返回 file_id: ' + JSON.stringify(resp).slice(0, 200));
+    }
+    return { id: info.file_id, src: `tg://${info.file_id}` };
   }
-  return { id: info.file_id, src: `tg://${info.file_id}` };
+
+  // 大文件：按 16MB 分片，每片单独 sendDocument
+  const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
+  if (totalChunks > MAX_CHUNKS) {
+    throw new Error(`文件过大（约 ${(totalChunks * CHUNK_SIZE) / 1024 / 1024}MB），超过分片上限 ${MAX_CHUNKS} 片`);
+  }
+  const chunks = [];
+  for (let i = 0; i < totalChunks; i++) {
+    const start = i * CHUNK_SIZE;
+    const end = Math.min(start + CHUNK_SIZE, fileSize);
+    const blob = file.slice(start, end); // Blob.slice 零拷贝、惰性，不占内存
+    const chunkFileName = `${fileName}.part${String(i).padStart(3, '0')}`;
+    const resp = await tg.sendFile(
+      blob,
+      env.TG_CHAT_ID,
+      'sendDocument',
+      'document',
+      `Part ${i + 1}/${totalChunks}`,
+      chunkFileName
+    );
+    const info = tg.getFileInfo(resp);
+    if (!info || !info.file_id) {
+      throw new Error(`分片 ${i + 1}/${totalChunks} 上传失败: ` + JSON.stringify(resp).slice(0, 200));
+    }
+    chunks.push({
+      index: i,
+      fileId: info.file_id,
+      size: info.file_size ?? end - start,
+      fileName: chunkFileName,
+    });
+  }
+  if (chunks.length !== totalChunks) {
+    throw new Error(`分片数量不一致：期望 ${totalChunks}，实际 ${chunks.length}`);
+  }
+  const id = 'c:' + toB64Url(JSON.stringify(chunks));
+  return { id, src: `tg://chunked:${chunks.length}` };
+}
+
+// 取件服务端文件名（RFC 5987：中文等非 ASCII 用 filename* 编码，浏览器优先取之）
+function dispositionValue(name) {
+  if (!name) return 'inline';
+  const asciiName = String(name).replace(/[^\x20-\x7E]/g, '_');
+  const encoded = encodeURIComponent(name);
+  return `inline; filename="${asciiName}"; filename*=UTF-8''${encoded}`;
 }
 
 // 取件：先校验 HMAC 防直链 token，再在服务端用 bot token 取回文件内容并流式返回。
+// 分片文件按序串联各片（支持 Range / HEAD）；单文件直接透传（不占内存）。
 // meta（file_name / file_type）用于设置正确的 Content-Type 与下载文件名。
 export async function serveFromTelegram(env, request, key, meta) {
   const token = new URL(request.url).searchParams.get('t');
@@ -112,29 +190,129 @@ export async function serveFromTelegram(env, request, key, meta) {
     return new Response('无效或缺失的访问凭证', { status: 403 });
   }
   const tg = new TelegramAPI(env.TG_BOT_TOKEN, env.TG_API || '');
-  let resp;
-  try {
-    resp = await tg.getFileContent(key);
-  } catch (e) {
-    return new Response('Telegram 取文件失败: ' + e.message, { status: 502 });
+
+  const isChunked = key.startsWith('c:');
+  let chunks = null;
+  if (isChunked) {
+    try {
+      chunks = JSON.parse(fromB64Url(key.slice(2)));
+    } catch (e) {
+      return new Response('分片信息损坏', { status: 502 });
+    }
+    if (!Array.isArray(chunks) || !chunks.length) {
+      return new Response('分片信息为空', { status: 502 });
+    }
+    chunks.sort((a, b) => a.index - b.index);
   }
-  if (!resp.ok) return new Response('Telegram 取文件失败', { status: 502 });
+
+  const contentType = (meta && meta.file_type) || 'application/octet-stream';
+  const disposition = dispositionValue(meta && meta.file_name);
+
+  // ---- 单文件：直接透传 Telegram 响应体（不读入内存），保留原行为 ----
+  if (!isChunked) {
+    let resp;
+    try {
+      resp = await tg.getFileContent(key);
+    } catch (e) {
+      return new Response('Telegram 取文件失败: ' + e.message, { status: 502 });
+    }
+    if (!resp.ok) return new Response('Telegram 取文件失败', { status: 502 });
+    const headers = new Headers();
+    headers.set('Content-Type', contentType);
+    headers.set('Content-Disposition', disposition);
+    const len = resp.headers.get('Content-Length');
+    if (len) headers.set('Content-Length', len);
+    if (request.method === 'HEAD') return new Response(null, { status: 200, headers });
+    return new Response(resp.body, { status: 200, headers });
+  }
+
+  // ---- 分片文件：流式串联 + Range / HEAD ----
+  const totalSize = chunks.reduce((t, c) => t + (c.size || 0), 0);
+
+  // 解析 Range（仅支持单段 bytes=start-end）
+  let rangeStart = 0;
+  let rangeEnd = totalSize - 1;
+  let isRange = false;
+  const rangeHdr = request.headers.get('Range');
+  if (rangeHdr) {
+    const m = /bytes=(\d+)-(\d*)/.exec(rangeHdr);
+    if (m) {
+      rangeStart = parseInt(m[1], 10);
+      rangeEnd = m[2] ? parseInt(m[2], 10) : totalSize - 1;
+      isRange = true;
+      if (rangeStart > rangeEnd || rangeStart >= totalSize) {
+        return new Response('Range Not Satisfiable', { status: 416 });
+      }
+      if (rangeEnd > totalSize - 1) rangeEnd = totalSize - 1;
+    }
+  }
+
+  if (request.method === 'HEAD') {
+    const h = new Headers();
+    h.set('Content-Type', contentType);
+    h.set('Content-Disposition', disposition);
+    h.set('Accept-Ranges', 'bytes');
+    if (isRange) {
+      h.set('Content-Range', `bytes ${rangeStart}-${rangeEnd}/${totalSize}`);
+      h.set('Content-Length', String(rangeEnd - rangeStart + 1));
+      return new Response(null, { status: 206, headers: h });
+    }
+    h.set('Content-Length', String(totalSize));
+    return new Response(null, { status: 200, headers: h });
+  }
+
   const headers = new Headers();
-  headers.set(
-    'Content-Type',
-    (meta && meta.file_type) || resp.headers.get('Content-Type') || 'application/octet-stream'
-  );
-  const name = meta && meta.file_name;
-  if (name) {
-    // 文件名可能含中文等非 ASCII：标准 Headers 要求值是 Latin1 ByteString，直接塞会抛错。
-    // 按 RFC 5987 用 filename* 做 UTF-8 百分号编码；filename 退化为 ASCII 兜底（浏览器优先用 filename*）。
-    const asciiName = String(name).replace(/[^\x20-\x7E]/g, '_');
-    const encoded = encodeURIComponent(name);
-    headers.set('Content-Disposition', `inline; filename="${asciiName}"; filename*=UTF-8''${encoded}`);
-  } else {
-    headers.set('Content-Disposition', 'inline');
+  headers.set('Content-Type', contentType);
+  headers.set('Content-Disposition', disposition);
+  headers.set('Accept-Ranges', 'bytes');
+
+  // 流式重组：只下载与 Range 相交的分片，避免整文件读入内存
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        let pos = 0;
+        for (const c of chunks) {
+          const cs = c.size || 0;
+          if (isRange) {
+            if (pos + cs <= rangeStart) {
+              pos += cs;
+              continue;
+            }
+            if (pos > rangeEnd) break;
+          }
+          let resp;
+          try {
+            resp = await tg.getFileContent(c.fileId);
+          } catch (e) {
+            controller.error(new Error(`分片 ${c.index} 取回失败: ${e.message}`));
+            return;
+          }
+          if (!resp.ok) {
+            controller.error(new Error(`分片 ${c.index} 取回失败 (HTTP ${resp.status})`));
+            return;
+          }
+          const data = new Uint8Array(await resp.arrayBuffer());
+          if (isRange) {
+            const s = Math.max(0, rangeStart - pos);
+            const e = Math.min(data.length, rangeEnd - pos + 1);
+            controller.enqueue(data.subarray(s, e));
+          } else {
+            controller.enqueue(data);
+          }
+          pos += cs;
+        }
+        controller.close();
+      } catch (e) {
+        controller.error(e);
+      }
+    },
+  });
+
+  if (isRange) {
+    headers.set('Content-Length', String(rangeEnd - rangeStart + 1));
+    headers.set('Content-Range', `bytes ${rangeStart}-${rangeEnd}/${totalSize}`);
+    return new Response(stream, { status: 206, headers });
   }
-  const len = resp.headers.get('Content-Length');
-  if (len) headers.set('Content-Length', len);
-  return new Response(resp.body, { status: 200, headers });
+  headers.set('Content-Length', String(totalSize));
+  return new Response(stream, { status: 200, headers });
 }

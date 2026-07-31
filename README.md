@@ -119,12 +119,14 @@
 
 ### 行为
 
-- **上传**：文件经 `/api/imgbed/upload` 时直接 `sendDocument` 到你的频道/群组，返回 `{ id: file_id, src: "tg://<file_id>" }`；分享记录的 `file_key` 即 Telegram `file_id`。
-- **取件**：`/file/:key?t=TOKEN` 先校验 HMAC 防直链 token，再在服务端用 bot token 调 `getFile` 取回字节并流式返回。**bot token 始终留在服务端，不会下发给浏览器**（与 ImgBed 的 302 不同，这里不暴露任何 token，更安全）。
+- **上传**：文件经 `/api/imgbed/upload` 时直接 `sendDocument` 到你的频道/群组，返回 `{ id, src }`。`id` 即为分享记录的 `file_key`：
+  - ≤ 16MB：单发，`file_key` = 纯 `file_id`（向后兼容旧格式）。
+  - \> 16MB：**自动分片**，每片单独 `sendDocument`（文件名形如 `原名.part000`），`file_key` = `c:` + base64url(分片 JSON)，取件时据此流式重组。
+- **取件**：`/file/:key?t=TOKEN` 先校验 HMAC 防直链 token，再在服务端用 bot token 调 `getFile` 取回字节并流式返回。**bot token 始终留在服务端，不会下发给浏览器**（与 ImgBed 的 302 不同，这里不暴露任何 token，更安全）。分片文件按序串联各片返回，支持 `Range`（视频拖动）与 `HEAD`。
 - **文件名**：含中文等非 ASCII 字符时按 RFC 5987 用 `filename*` 编码，浏览器能正确下载出中文名。
 - **删除**：删除分享时**不会**清理 Telegram 侧消息（文件仍保留在频道/群里），介意的话定期清理频道即可。
 
-> ⚠️ **大小限制**：Telegram Bot API 的 `getFile` 取回**单文件上限约 20MB**（`sendDocument` 发送上限 50MB，但取回被限制在 20MB）。**超过约 20MB 的文件在取件时会失败**。若需更大文件，请改用 ImgBed 后端（无此限制）。
+> ⚠️ **大小限制**：Telegram `sendDocument` 单次发送上限 50MB、`getFile` 取回约 20MB。本项目对超过 **16MB** 的文件**自动分片上传**（每片 16MB，分片元信息编码进 `file_key`，无需额外存储），取件时按序流式重组——因此单文件上限约 **800MB（50 片 × 16MB）**，且分片下载支持 `Range` / `HEAD`。超过 800MB 会被拒传。若需更大文件，请改用 ImgBed 后端（无此限制）。
 
 ### 本地调试（mock Telegram）
 
