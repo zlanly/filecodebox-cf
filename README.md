@@ -60,7 +60,10 @@
 - 回到 Worker 控制台 → **Settings → Variables and Secrets → Add**。
 - **必填：**
   - `IMG_BED_URL`：ImgBed 实例地址，如 `https://img.example.com`（核心，决定文件存到哪）
-  - `ADMIN_KEY`：管理后台密码（建议选 **Secret** 类型）
+  - 管理凭证（**二选一**）：
+    - `ADMIN_API_TOKEN`（**推荐**，Secret 类型）：设一个随机串。配置后管理接口直接 `Authorization: Bearer <ADMIN_API_TOKEN>` 调用，**无需登录**，类 ImgBed 的 API Token 用法。
+    - `ADMIN_KEY`：管理后台**密码**（Secret 类型）。走前端登录拿 token 的旧流程。
+    - 两者都设也可；只设其中一个即可。
 - **可选：**
   - `IMG_BED_UPLOAD_TOKEN`：ImgBed 的 **API Token**（形如 `imgbed_...`），通过 `Authorization: Bearer` 请求头传给 ImgBed（这是 CloudFlare-ImgBed 上传鉴权的方式，务必用此变量）。
     仅当你的 ImgBed 实例使用 **authCode** 方式鉴权（而非 API Token）时，才额外设置 `IMG_BED_UPLOAD_TOKEN_PARAM=authCode`（此时 token 会作为 `?authCode=` 附加到上传请求）。
@@ -114,11 +117,11 @@
 | `GET` | `/api/share/:code` | 分享元信息（不消耗） |
 | `POST` | `/api/share/:code/claim` | 取件（消耗一次）。文本直接返回；文件返回 `/file/:key?t=TOKEN` |
 | `GET` | `/file/:key?t=TOKEN` | 校验防直链 token 后 302 跳转到 ImgBed 原地址（Range / 大文件由 ImgBed 负责） |
-| `POST` | `/api/admin/login` | 登录，返回 `token` |
-| `GET` | `/api/admin/stats` | 统计（需 `Authorization: Bearer <token>`） |
-| `GET` | `/api/admin/shares` | 分享列表 |
-| `DELETE` | `/api/admin/share/:code` | 删除分享（可选同步清理 ImgBed 对象） |
-| `POST` | `/api/admin/sweep` | 清理过期 / 超额分享 |
+| `POST` | `/api/admin/login` | 登录（用 `ADMIN_KEY` 密码）；若已设 `ADMIN_API_TOKEN` 可跳过本步，直接 `Bearer <token>` 调管理接口 |
+| `GET` | `/api/admin/stats` | 统计（需 `Authorization: Bearer <token>`；设 `ADMIN_API_TOKEN` 后可直接用该 token） |
+| `GET` | `/api/admin/shares` | 分享列表（需 Bearer token） |
+| `DELETE` | `/api/admin/share/:code` | 删除分享（需 Bearer token；可选同步清理 ImgBed 对象） |
+| `POST` | `/api/admin/sweep` | 清理过期 / 超额分享（需 Bearer token） |
 | `GET`/`POST` | `/api/install` | 首次部署初始化 D1 表结构（幂等；也可由首次访问自动建表） |
 | `GET` | `/api/config`、`/api/health` | 公共配置 / 健康检查 |
 

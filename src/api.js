@@ -185,6 +185,11 @@ export async function adminLogin({ request, env }) {
     const f = await request.formData().catch(() => null);
     password = f ? f.get('password') || '' : '';
   }
+  // 若配置了静态 ADMIN_API_TOKEN，则它本身就是可直接使用的 Bearer token：
+  // 在登录框填入该 token 也会直接返回它，前端拿到后即可用 Bearer 调用管理接口。
+  if (env.ADMIN_API_TOKEN && String(password) === String(env.ADMIN_API_TOKEN)) {
+    return json({ token: env.ADMIN_API_TOKEN });
+  }
   if (!env.ADMIN_KEY || String(password) !== String(env.ADMIN_KEY)) {
     return json({ error: '管理员密码错误' }, 401);
   }

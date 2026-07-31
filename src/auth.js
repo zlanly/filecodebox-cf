@@ -72,6 +72,11 @@ export async function verifyAdmin(env, request) {
   const auth = request.headers.get('Authorization') || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   if (!token) return false;
+  // 静态管理 token：在控制台配置 ADMIN_API_TOKEN 后，可直接用
+  //   Authorization: Bearer <ADMIN_API_TOKEN>
+  // 调用管理接口，无需先登录（类 ImgBed 的 API Token 用法，推荐）。
+  if (env.ADMIN_API_TOKEN && token === String(env.ADMIN_API_TOKEN)) return true;
+  // 兼容旧式「密码登录」派生的 token
   const expected = await expectedAdminToken(env);
   // 定长比较，避免计时攻击
   if (token.length !== expected.length) return false;

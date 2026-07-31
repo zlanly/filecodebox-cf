@@ -134,6 +134,7 @@ const env = {
   IMG_BED_UPLOAD_TOKEN: process.env.FCB_IMGBED_UPLOAD_TOKEN || '',
   IMG_BED_UPLOAD_TOKEN_PARAM: process.env.FCB_IMGBED_UPLOAD_TOKEN_PARAM || '',
   ADMIN_KEY: 'preview-admin',
+  ADMIN_API_TOKEN: process.env.FCB_ADMIN_API_TOKEN || '',
   FILE_SECRET: 'preview-file-secret',
   APP_NAME: '文件快递柜',
   APP_SUBTITLE: '本地预览 · 委托 CloudFlare-ImgBed（mock）',

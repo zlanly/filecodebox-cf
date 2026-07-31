@@ -1,4 +1,5 @@
 ADMIN_KEY=your-local-admin-key
+ADMIN_API_TOKEN=your-local-admin-api-token
 FILE_SECRET=your-local-file-secret
 APP_NAME=文件快递柜
 IMG_BED_URL=https://imgbed.test
