@@ -8,8 +8,12 @@ import { fileToken } from './auth.js';
 //   TG_CHAT_ID   : 文件要发往的频道 / 群组 ID（机器人需为该会话管理员；私聊可用自己的 id）
 //   TG_API       : 可选，自定义反代域名（用于 api.telegram.org 被墙的环境），留空则用官方 API
 //
-// 大文件：Telegram sendDocument 单次发送上限 50MB，但 getFile 取回约 20MB 受限。
-// 因此超过 CHUNK_SIZE(16MB) 的文件自动分片——每片单独 sendDocument，取件时按序流式重组。
+// 大小限制（对齐 CloudFlare-ImgBed 的 Telegram 存储口径）：
+//   · 单文件上传：16MB（安全阈值，确保可整文件经 getFile 取回）/ 20MB（Bot API 硬限）
+//   · 分片上传：每片 ≤ CHUNK_SIZE(16MB)，无理论上限（受 1 小时会话超时与上传速度约束）
+//   · 单文件下载：20MB（getFile 限制）
+//   · 分片下载：无限制（逐片 getFile 拼接，支持 Range / HEAD）
+// 因此超过 CHUNK_SIZE 的文件分片——每片单独 sendDocument，取件时按序流式重组。
 // 分片元信息编码进 file_key（base64url 的 JSON 数组），无需额外存储。
 //
 // 安全说明：取件时本 Worker 在服务端用 bot token 调 getFile 取回字节并流式返回给浏览器，
@@ -17,8 +21,9 @@ import { fileToken } from './auth.js';
 
 // 分片大小：卡 getFile 下载上限 20MB，留 4MB 余量（与 CloudFlare-ImgBed 一致）
 export const CHUNK_SIZE = 16 * 1024 * 1024; // 16MiB
-// 分片数上限（避免 Worker CPU 超时 / D1 value 过大）：50 片 ≈ 800MB
-const MAX_CHUNKS = 50;
+// 分片数：无理论上限。客户端分块上传（init→chunk→merge）逐片独立请求，受 1 小时会话超时约束；
+// 服务端自动分片（uploadToTelegram）在单次 Worker 请求内连续调 sendDocument，受 Worker CPU 时间约束。
+// 不在代码里设硬上限——与 CloudFlare-ImgBed 的客户端分块逻辑一致。
 
 // base64url 编解码（纯 ASCII 的 chunks JSON，跨 Cloudflare Workers / Node 均可用）
 function toB64Url(str) {
@@ -48,7 +53,8 @@ export class TelegramAPI {
     };
   }
 
-  // 发送文件到 Telegram（统一用 sendDocument，支持任意类型、最大 50MB）
+  // 发送文件到 Telegram（统一用 sendDocument）。单文件本项目以 20MB（getFile 可取回）为硬限；
+  // 超过 CHUNK_SIZE(16MB) 的由调用方分片上传，每片单独 sendDocument。
   async sendFile(file, chatId, functionName, functionType, caption = '', fileName = '') {
     const formData = new FormData();
     formData.append('chat_id', chatId);
@@ -135,11 +141,10 @@ export async function uploadToTelegram(env, request) {
     return { id: info.file_id, src: `tg://${info.file_id}` };
   }
 
-  // 大文件：按 16MB 分片，每片单独 sendDocument
+  // 大文件：按 16MB 分片，每片单独 sendDocument。
+  // 注：服务端自动分片是在「单次 Worker 请求」内连续调 sendDocument，受 Worker CPU 时间约束；
+  // 真正的大文件请走前端客户端分块上传（init→chunk→merge，逐片独立请求，无分片数理论上限）。
   const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
-  if (totalChunks > MAX_CHUNKS) {
-    throw new Error(`文件过大（约 ${(totalChunks * CHUNK_SIZE) / 1024 / 1024}MB），超过分片上限 ${MAX_CHUNKS} 片`);
-  }
   const chunks = [];
   for (let i = 0; i < totalChunks; i++) {
     const start = i * CHUNK_SIZE;

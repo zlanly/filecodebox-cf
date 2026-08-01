@@ -120,13 +120,22 @@
 ### 行为
 
 - **上传**：
-  - **大文件（> 20MB）走客户端分块**：前端把文件切成 16MB 小片，逐片经 `/api/chunk/upload` 单独 `sendDocument` 到 Telegram，最后 `/api/chunk/merge` 把各片元信息（`index/fileId/size/fileName`）汇总成 `c:` 的 `file_key`。这样大文件**不必一次性推到 Worker**，从而绕过 Cloudflare 的请求体 / CPU 限制，真正支持到约 800MB。
+  - **大文件（> 20MB）走客户端分块**：前端把文件切成 16MB 小片，逐片经 `/api/chunk/upload` 单独 `sendDocument` 到 Telegram，最后 `/api/chunk/merge` 把各片元信息（`index/fileId/size/fileName`）汇总成 `c:` 的 `file_key`。这样大文件**不必一次性推到 Worker**，从而绕过 Cloudflare 的请求体 / CPU 限制；分片上传**无理论上限**（受 1 小时会话超时与上传速度约束），与 CloudFlare-ImgBed 的客户端分块逻辑一致。
   - **小文件（≤ 20MB）**：前端经 `/api/imgbed/upload` 单发；若整文件 > 16MB，服务端也会兜底自动分片（同上的 `c:` 格式），向后兼容旧调用方式。
 - **取件**：`/file/:key?t=TOKEN` 先校验 HMAC 防直链 token，再在服务端用 bot token 调 `getFile` 取回字节并流式返回。**bot token 始终留在服务端，不会下发给浏览器**（与 ImgBed 的 302 不同，这里不暴露任何 token，更安全）。分片文件按序串联各片返回，支持 `Range`（视频拖动）与 `HEAD`。
 - **文件名**：含中文等非 ASCII 字符时按 RFC 5987 用 `filename*` 编码，浏览器能正确下载出中文名。
 - **删除**：删除分享时**不会**清理 Telegram 侧消息（文件仍保留在频道/群里），介意的话定期清理频道即可。
 
-> ⚠️ **大小限制**：Telegram `sendDocument` 单次发送上限 50MB、`getFile` 取回约 20MB。本项目对超过 **16MB** 的文件**自动分片**，分片元信息编码进 `file_key`（无需额外存储），取件时按序流式重组，下载支持 `Range` / `HEAD`。**大文件（> 20MB）由前端客户端分块上传**（`init → 逐片 /api/chunk/upload → /api/chunk/merge`，每片 16MB），绕过 Cloudflare Worker 的请求体 / CPU 限制，因此单文件上限约 **800MB（50 片 × 16MB）**。超过 800MB 会被拒传。若需更大文件，请改用 ImgBed 后端（无此限制）。
+> ⚠️ **大小限制**（对齐 CloudFlare-ImgBed 的 Telegram 存储口径）：
+>
+> | 场景 | 限制 |
+> |------|------|
+> | 单文件上传 | 16MB（安全阈值）/ 20MB（Telegram Bot API 硬限，确保可整文件经 `getFile` 取回） |
+> | 分片上传 | 每片 ≤ 16MB，**无理论上限**（受 1 小时会话超时与上传速度约束） |
+> | 单文件下载 | 20MB（`getFile` 限制） |
+> | 分片下载 | **无限制**（逐片 `getFile` 拼接，支持 `Range` / `HEAD`） |
+>
+> 超过 16MB 的文件自动分片，分片元信息编码进 `file_key`（无需额外存储），取件时按序流式重组。大文件（> 20MB）由前端**客户端分块上传**（`init → 逐片 /api/chunk/upload → /api/chunk/merge`，每片 16MB），逐片独立请求，不受 Cloudflare Worker 请求体 / CPU 限制，**分片数无上限**。需要超大文件或更高吞吐时，ImgBed 后端（R2）同样可用、且无此约束。
 
 ### 本地调试（mock Telegram）
 
