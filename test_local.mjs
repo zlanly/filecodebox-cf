@@ -249,10 +249,15 @@ let adminToken;
 // ---- 8. 过期清理（sweep 应同步清理 ImgBed） ----
 {
   const up = await (await call('POST', '/api/imgbed/upload', fd({ file: new File(['expired'], 'e.txt', { type: 'text/plain' }) }))).json();
-  // 取件码已过期（expire_ms=1，立刻过期）
-  await call('POST', '/api/share', fd({ type: 'file', file_key: up.id, file_name: 'e.txt', file_type: 'text/plain', file_size: '7', expire_ms: '1', download_limit: '0' }));
+  // 取件码已过期（expire_ms=1，立刻过期）。注意：Date.now() 为整数毫秒，管道处理本身可能 < 1ms，
+  // 导致 sweep 取到的 now 仍 <= expire_at(=created_at+1) 而漏判——属墙钟时序抖动，非逻辑缺陷。
+  // 这里把该分享的 expire_at 直接拨到确定已过去的时间，确保 sweep 必定命中（生产环境过期分享的 expire_at 即处于过去）。
+  const createR = await call('POST', '/api/share', fd({ type: 'file', file_key: up.id, file_name: 'e.txt', file_type: 'text/plain', file_size: '7', expire_ms: '1', download_limit: '0' }));
+  const createJ = await createR.json();
+  await fcb_db.prepare('UPDATE shares SET expire_at = ? WHERE code = ?').bind(Date.now() - 60_000, createJ.code).run();
 
   const sweep = await (await call('POST', '/api/admin/sweep', undefined, { Authorization: 'Bearer ' + adminToken })).json();
+  ok(sweep.cleaned >= 1, 'sweep 清理了至少 1 条: ' + sweep.cleaned);
   ok(sweep.cleaned >= 1, 'sweep 清理了至少 1 条: ' + sweep.cleaned);
   ok(deletedIds.includes(up.id) || !uploaded[up.id], 'sweep 同步清理了 ImgBed 侧的过期对象');
 
