@@ -47,6 +47,43 @@ const ROUTES = [
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
     });
   } },
+  // 客户端分块上传（init → 逐片 /api/chunk/upload → /api/chunk/merge），仅在 Telegram 模式可用：
+  // 前端把大文件切成 16MB 的小片逐片发来，Worker 每片单独 sendDocument 到 Telegram，
+  // 最后 merge 把各片元信息组装成 c: 的 file_key，从而绕过 Cloudflare Worker 请求体/CPU 限制。
+  { method: 'POST', pattern: '/api/chunk/init', handler: async (ctx) => {
+    const { env } = ctx;
+    if (!(env.TG_BOT_TOKEN && env.TG_CHAT_ID)) return api.json({ error: '未启用 Telegram 存储' }, 400);
+    return api.json({ chunkSize: CHUNK_SIZE });
+  } },
+  { method: 'POST', pattern: '/api/chunk/upload', handler: async (ctx) => {
+    const { env } = ctx;
+    if (!(env.TG_BOT_TOKEN && env.TG_CHAT_ID)) return api.json({ error: '未启用 Telegram 存储' }, 400);
+    let form;
+    try { form = await ctx.request.formData(); } catch (e) { return api.json({ error: '无效的分片上传请求' }, 400); }
+    const file = form.get('file');
+    const index = parseInt(form.get('index') || '0', 10);
+    const fileName = form.get('fileName') || `part${String(index).padStart(3, '0')}`;
+    if (!file) return api.json({ error: '分片为空' }, 400);
+    try {
+      const r = await telegram.uploadChunk(env, file, fileName);
+      return api.json({ success: true, index, fileId: r.fileId, size: r.size, fileName: r.fileName });
+    } catch (e) {
+      return api.json({ error: e.message }, 500);
+    }
+  } },
+  { method: 'POST', pattern: '/api/chunk/merge', handler: async (ctx) => {
+    const { env } = ctx;
+    if (!(env.TG_BOT_TOKEN && env.TG_CHAT_ID)) return api.json({ error: '未启用 Telegram 存储' }, 400);
+    const body = await ctx.request.json().catch(() => ({}));
+    const chunks = body.chunks;
+    if (!Array.isArray(chunks) || !chunks.length) return api.json({ error: '分片列表为空' }, 400);
+    try {
+      const id = telegram.assembleChunkedKey(chunks);
+      return api.json({ id, src: `tg://chunked:${chunks.length}` });
+    } catch (e) {
+      return api.json({ error: e.message }, 500);
+    }
+  } },
   { method: 'GET', pattern: '/api/share/:code', handler: api.getShareMeta },
   { method: 'POST', pattern: '/api/share/:code/claim', handler: api.claimShare },
   { method: 'GET', pattern: '/file/:key', handler: async (ctx) => {

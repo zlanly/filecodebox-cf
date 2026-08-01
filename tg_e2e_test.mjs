@@ -30,6 +30,43 @@ async function uploadAndShare(payload, fileName, fileType) {
   return { upJson, claimUrl: claim.url };
 }
 
+// 模拟前端客户端分块上传：init → 逐片 /api/chunk/upload → /api/chunk/merge → 分享 → 取件
+async function clientChunkUpload(payload, fileName, fileType) {
+  const init = await (await fetch(`${BASE}/api/chunk/init`, { method: 'POST' })).json();
+  const chunkSize = init.chunkSize || CHUNK;
+  const total = Math.max(1, Math.ceil(payload.length / chunkSize));
+  const chunks = [];
+  for (let i = 0; i < total; i++) {
+    const start = i * chunkSize;
+    const end = Math.min(start + chunkSize, payload.length);
+    const blob = new Blob([payload.subarray(start, end)], { type: fileType });
+    const chunkFileName = `${fileName}.part${String(i).padStart(3, '0')}`;
+    const fd = new FormData();
+    fd.append('file', blob, chunkFileName);
+    fd.append('index', String(i));
+    fd.append('fileName', chunkFileName);
+    const r = await (await fetch(`${BASE}/api/chunk/upload`, { method: 'POST', body: fd })).json();
+    if (!r.success) throw new Error('分片上传失败：' + JSON.stringify(r));
+    chunks.push({ index: i, fileId: r.fileId, size: r.size, fileName: r.fileName });
+  }
+  const merge = await (await fetch(`${BASE}/api/chunk/merge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fileName, fileType, totalChunks: total, chunks }),
+  })).json();
+  if (!merge.id || !merge.id.startsWith('c:')) throw new Error('merge 未返回 c: file_key：' + JSON.stringify(merge));
+  const sf = new FormData();
+  sf.append('type', 'file');
+  sf.append('file_key', merge.id);
+  sf.append('file_name', fileName);
+  sf.append('file_type', fileType);
+  sf.append('file_size', String(payload.length));
+  const create = await fetch(`${BASE}/api/share`, { method: 'POST', body: sf });
+  const createJson = await create.json();
+  const claim = await (await fetch(`${BASE}/api/share/${createJson.code}/claim`, { method: 'POST' })).json();
+  return { claimUrl: claim.url, mergeId: merge.id };
+}
+
 function assert(cond, msg) { if (!cond) throw new Error('断言失败：' + msg); }
 
 async function main() {
@@ -121,7 +158,21 @@ async function main() {
     console.log('[6] /api/config 显示：' + cfg.storage + ' ✅');
   }
 
-  console.log('\n✅ Telegram 存储端到端测试全部通过（含大文件分片 + Range）');
+  // ---------- 7) 客户端分块上传流程（init→chunk→merge）----------
+  {
+    const fileName = '客户端分块.bin';
+    const payload = randBytes(CHUNK * 2 + 512 * 1024, 33); // ~33MB → 3 片
+    const { claimUrl, mergeId } = await clientChunkUpload(payload, fileName, 'application/octet-stream');
+    assert(mergeId.startsWith('c:'), 'merge 应返回 c: file_key');
+    const dl = await fetch(`${BASE}${claimUrl}`);
+    assert(dl.status === 200, '客户端分块下载 200，实际 ' + dl.status);
+    const got = new Uint8Array(await dl.arrayBuffer());
+    assert(got.length === payload.length, `客户端分块字节数 ${got.length} != ${payload.length}`);
+    for (let i = 0; i < payload.length; i++) assert(got[i] === payload[i], '客户端分块字节不一致 @' + i);
+    console.log(`[7] 客户端分块上传流程（init/chunk/upload/merge，${payload.length}字节）全量一致 ✅`);
+  }
+
+  console.log('\n✅ Telegram 存储端到端测试全部通过（含客户端分块上传 + Range）');
 }
 
 main().then(() => process.exit(0)).catch((e) => {

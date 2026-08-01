@@ -62,6 +62,7 @@
       const cfg = await api('/api/config');
       if (cfg.name) $('#appName').textContent = cfg.name;
       if (cfg.subtitle) $('#appSubtitle').textContent = cfg.subtitle;
+      state.storage = cfg.storage || ''; // 'Telegram (Bot API)' 或 'CloudFlare-ImgBed (API)'
     } catch (e) { /* 忽略 */ }
   }
 
@@ -131,11 +132,10 @@
         fd.set('text', text);
       } else {
         if (!state.file) throw new Error('请先选择文件');
-        // 文件交给 ImgBed：把请求体流式代理到 ImgBed 的 /upload（大文件亦支持）
-        const upForm = new FormData();
-        upForm.set('file', state.file);
-        const up = await api('/api/imgbed/upload', { method: 'POST', body: upForm });
-        if (!up.id) throw new Error('ImgBed 未返回文件 id');
+        // 文件上传：Telegram 模式下大文件（>20MB）走客户端分块（init→逐片→merge），
+        // 绕过 Cloudflare Worker 请求体/CPU 限制；其余走 /api/imgbed/upload（ImgBed 模式或 Telegram 小文件）。
+        const up = await uploadFileKey(state.file);
+        if (!up.id) throw new Error('存储后端未返回文件 id');
         fd.set('file_key', up.id);
         fd.set('file_name', state.file.name);
         fd.set('file_type', state.file.type || 'application/octet-stream');
@@ -151,6 +151,50 @@
     }
   });
 
+  // 文件上传：返回 { id }（即分享用的 file_key）。
+  // Telegram 模式且文件 > 20MB 时走客户端分块上传（复用 ImgBed 的 init→chunk→merge 协议），
+  // 否则直接 /api/imgbed/upload（ImgBed 模式流式代理，或 Telegram 小文件单发）。
+  async function uploadFileKey(file) {
+    const isTG = state.storage === 'Telegram (Bot API)';
+    if (isTG && file.size > 20 * 1024 * 1024) {
+      return await uploadChunked(file);
+    }
+    const upForm = new FormData();
+    upForm.set('file', file);
+    return await api('/api/imgbed/upload', { method: 'POST', body: upForm });
+  }
+
+  // 客户端分块上传（与 CloudFlare-ImgBed 一致）：每片 16MB，逐片 POST /api/chunk/upload，
+  // 最后 POST /api/chunk/merge 汇总各片元信息，得到分片 file_key。
+  async function uploadChunked(file) {
+    const { chunkSize } = await api('/api/chunk/init', { method: 'POST' });
+    const total = Math.max(1, Math.ceil(file.size / chunkSize));
+    const chunks = [];
+    for (let i = 0; i < total; i++) {
+      const start = i * chunkSize;
+      const end = Math.min(start + chunkSize, file.size);
+      const blob = file.slice(start, end);
+      const fileName = `${file.name}.part${String(i).padStart(3, '0')}`;
+      const fd = new FormData();
+      fd.set('file', blob);
+      fd.set('index', String(i));
+      fd.set('fileName', fileName);
+      const r = await api('/api/chunk/upload', { method: 'POST', body: fd });
+      if (!r.success) throw new Error(`分片 ${i + 1}/${total} 上传失败`);
+      chunks.push({ index: i, fileId: r.fileId, size: r.size, fileName: r.fileName });
+    }
+    return await api('/api/chunk/merge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileName: file.name,
+        fileType: file.type || 'application/octet-stream',
+        totalChunks: total,
+        chunks,
+      }),
+    });
+  }
+
   function showSendResult(data) {
     $('#resultCode').textContent = formatCode(data.code);
     const link = `${location.origin}/#r/${data.code}`;
@@ -158,7 +202,7 @@
     const tips = [];
     tips.push(data.expire_at ? `过期：${fmtExpire(data.expire_at)}` : '永久有效');
     tips.push(data.download_limit > 0 ? `可取 ${data.download_limit} 次` : '取件次数不限');
-    if (data.type === 'file') tips.push('文件已存入 ImgBed');
+    if (data.type === 'file') tips.push(state.storage === 'Telegram (Bot API)' ? '文件已存入 Telegram' : '文件已存入 ImgBed');
     $('#resultTip').textContent = tips.join(' · ');
     $('#sendResult').classList.remove('hidden');
   }

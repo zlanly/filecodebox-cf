@@ -16,7 +16,7 @@ import { fileToken } from './auth.js';
 // bot token 始终留在服务端，不会下发给客户端（与 ImgBed 的 302 不同，这里不暴露 token）。
 
 // 分片大小：卡 getFile 下载上限 20MB，留 4MB 余量（与 CloudFlare-ImgBed 一致）
-const CHUNK_SIZE = 16 * 1024 * 1024; // 16MiB
+export const CHUNK_SIZE = 16 * 1024 * 1024; // 16MiB
 // 分片数上限（避免 Worker CPU 超时 / D1 value 过大）：50 片 ≈ 800MB
 const MAX_CHUNKS = 50;
 
@@ -170,6 +170,27 @@ export async function uploadToTelegram(env, request) {
   }
   const id = 'c:' + toB64Url(JSON.stringify(chunks));
   return { id, src: `tg://chunked:${chunks.length}` };
+}
+
+// 单分片上传（供前端客户端分块上传的 /api/chunk/upload 调用）：把一片 Blob 单独 sendDocument 到 Telegram。
+// 返回 { fileId, size, fileName }，前端收集各片后交给 assembleChunkedKey 组装 file_key。
+export async function uploadChunk(env, blob, fileName) {
+  if (!env.TG_BOT_TOKEN) throw new Error('未配置 TG_BOT_TOKEN（Telegram Bot Token）');
+  if (!env.TG_CHAT_ID) throw new Error('未配置 TG_CHAT_ID（文件要发往的频道/群组 ID）');
+  const tg = new TelegramAPI(env.TG_BOT_TOKEN, env.TG_API || '');
+  const resp = await tg.sendFile(blob, env.TG_CHAT_ID, 'sendDocument', 'document', '', fileName);
+  const info = tg.getFileInfo(resp);
+  if (!info || !info.file_id) {
+    throw new Error('分片上传失败: ' + JSON.stringify(resp).slice(0, 200));
+  }
+  return { fileId: info.file_id, size: info.file_size ?? blob.size, fileName };
+}
+
+// 把各分片元信息组装成分片 file_key（c: + base64url(JSON)），与取件端 serveFromTelegram 约定一致。
+export function assembleChunkedKey(chunks) {
+  if (!Array.isArray(chunks) || !chunks.length) throw new Error('分片为空');
+  const sorted = [...chunks].sort((a, b) => a.index - b.index);
+  return 'c:' + toB64Url(JSON.stringify(sorted));
 }
 
 // 取件服务端文件名（RFC 5987：中文等非 ASCII 用 filename* 编码，浏览器优先取之）

@@ -119,14 +119,14 @@
 
 ### 行为
 
-- **上传**：文件经 `/api/imgbed/upload` 时直接 `sendDocument` 到你的频道/群组，返回 `{ id, src }`。`id` 即为分享记录的 `file_key`：
-  - ≤ 16MB：单发，`file_key` = 纯 `file_id`（向后兼容旧格式）。
-  - \> 16MB：**自动分片**，每片单独 `sendDocument`（文件名形如 `原名.part000`），`file_key` = `c:` + base64url(分片 JSON)，取件时据此流式重组。
+- **上传**：
+  - **大文件（> 20MB）走客户端分块**：前端把文件切成 16MB 小片，逐片经 `/api/chunk/upload` 单独 `sendDocument` 到 Telegram，最后 `/api/chunk/merge` 把各片元信息（`index/fileId/size/fileName`）汇总成 `c:` 的 `file_key`。这样大文件**不必一次性推到 Worker**，从而绕过 Cloudflare 的请求体 / CPU 限制，真正支持到约 800MB。
+  - **小文件（≤ 20MB）**：前端经 `/api/imgbed/upload` 单发；若整文件 > 16MB，服务端也会兜底自动分片（同上的 `c:` 格式），向后兼容旧调用方式。
 - **取件**：`/file/:key?t=TOKEN` 先校验 HMAC 防直链 token，再在服务端用 bot token 调 `getFile` 取回字节并流式返回。**bot token 始终留在服务端，不会下发给浏览器**（与 ImgBed 的 302 不同，这里不暴露任何 token，更安全）。分片文件按序串联各片返回，支持 `Range`（视频拖动）与 `HEAD`。
 - **文件名**：含中文等非 ASCII 字符时按 RFC 5987 用 `filename*` 编码，浏览器能正确下载出中文名。
 - **删除**：删除分享时**不会**清理 Telegram 侧消息（文件仍保留在频道/群里），介意的话定期清理频道即可。
 
-> ⚠️ **大小限制**：Telegram `sendDocument` 单次发送上限 50MB、`getFile` 取回约 20MB。本项目对超过 **16MB** 的文件**自动分片上传**（每片 16MB，分片元信息编码进 `file_key`，无需额外存储），取件时按序流式重组——因此单文件上限约 **800MB（50 片 × 16MB）**，且分片下载支持 `Range` / `HEAD`。超过 800MB 会被拒传。若需更大文件，请改用 ImgBed 后端（无此限制）。
+> ⚠️ **大小限制**：Telegram `sendDocument` 单次发送上限 50MB、`getFile` 取回约 20MB。本项目对超过 **16MB** 的文件**自动分片**，分片元信息编码进 `file_key`（无需额外存储），取件时按序流式重组，下载支持 `Range` / `HEAD`。**大文件（> 20MB）由前端客户端分块上传**（`init → 逐片 /api/chunk/upload → /api/chunk/merge`，每片 16MB），绕过 Cloudflare Worker 的请求体 / CPU 限制，因此单文件上限约 **800MB（50 片 × 16MB）**。超过 800MB 会被拒传。若需更大文件，请改用 ImgBed 后端（无此限制）。
 
 ### 本地调试（mock Telegram）
 
@@ -160,7 +160,10 @@ BASE=http://127.0.0.1:8088 node tg_e2e_test.mjs  # 上传→分享→取件→�
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `POST` | `/api/share` | 创建分享。`multipart`：`type=text\|file`、`text`、`file_key`+`file_name`+`file_type`+`file_size`（文件先经 `/api/imgbed/upload` 上传）、`expire_ms`、`download_limit`、`password` |
-| `POST` | `/api/imgbed/upload` | 文件上传入口。Telegram 模式直发 Bot API `sendDocument`（返回 `tg://<file_id>`）；ImgBed 模式流式代理到其 `/upload`，返回 `{ id, src }`（`id` 即 ImgBed 文件 key） |
+| `POST` | `/api/imgbed/upload` | 文件上传入口（小文件）。Telegram 模式直发 Bot API `sendDocument`（返回 `tg://<file_id>`）；ImgBed 模式流式代理到其 `/upload`，返回 `{ id, src }`（`id` 即 ImgBed 文件 key） |
+| `POST` | `/api/chunk/init` | 客户端分块上传初始化（仅 Telegram 模式），返回 `{ chunkSize }`（当前 16MB） |
+| `POST` | `/api/chunk/upload` | 上传单个分片（仅 Telegram 模式）。`multipart`：`file` + `index` + `fileName`，返回 `{ success, index, fileId, size, fileName }` |
+| `POST` | `/api/chunk/merge` | 汇总分片元信息（仅 Telegram 模式）。`json`：`{ fileName, fileType, totalChunks, chunks }`，返回 `{ id, src }`（`id` 即分片 `file_key`，形如 `c:...`） |
 | `GET` | `/api/share/:code` | 分享元信息（不消耗） |
 | `POST` | `/api/share/:code/claim` | 取件（消耗一次）。文本直接返回；文件返回 `/file/:key?t=TOKEN` |
 | `GET` | `/file/:key?t=TOKEN` | 校验防直链 token 后：ImgBed 模式 302 跳转到 ImgBed 原地址；Telegram 模式由 Worker 服务端取回字节返回（bot token 不出服务端） |
